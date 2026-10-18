@@ -26,8 +26,20 @@ import org.mozilla.geckoview.GeckoView
  * navigation controls and drawer are native Android UI owned by Astra.
  */
 class MainActivity : Activity() {
-    private lateinit var session: GeckoSession
+    private lateinit var runtime: GeckoRuntime
     private lateinit var addressBar: EditText
+    private lateinit var tabCountButton: TextView
+
+    private data class BrowserTab(
+        val session: GeckoSession,
+        var url: String? = null,
+        var isHome: Boolean = true
+    )
+
+    private val tabs = mutableListOf<BrowserTab>()
+    private var currentTabIndex = 0
+    private val currentTab: BrowserTab
+        get() = tabs[currentTabIndex]
     private lateinit var homeSearch: EditText
     private lateinit var geckoView: GeckoView
     private lateinit var homeView: View
@@ -108,10 +120,8 @@ class MainActivity : Activity() {
         ))
         setContentView(root)
 
-        val runtime = GeckoRuntime.create(applicationContext)
-        session = GeckoSession()
-        session.open(runtime)
-        geckoView.setSession(session)
+        runtime = GeckoRuntime.create(applicationContext)
+        createTab(switchTo = true)
     }
 
     private fun buildTopBar(): View {
@@ -295,20 +305,21 @@ class MainActivity : Activity() {
             setBackgroundColor(panelColor)
         }
         bar.addView(iconButton("‹", "Go back") {
-            if (!showingHome) session.goBack()
+            if (!currentTab.isHome) currentTab.session.goBack()
         }, equalButtonParams())
         bar.addView(iconButton("›", "Go forward") {
-            if (!showingHome) session.goForward()
+            if (!currentTab.isHome) currentTab.session.goForward()
         }, equalButtonParams())
         bar.addView(iconButton("⌂", "Home") {
             showHome()
         }, equalButtonParams())
         bar.addView(iconButton("↻", "Reload page") {
-            if (!showingHome) session.reload() else homeSearch.requestFocus()
+            if (!currentTab.isHome) currentTab.session.reload() else homeSearch.requestFocus()
         }, equalButtonParams())
-        bar.addView(iconButton("☷", "Open browser menu") {
-            openMenu()
-        }, equalButtonParams())
+        tabCountButton = iconButton("▢ ${tabs.size}", "Show open tabs") {
+            showTabsDialog()
+        } as TextView
+        bar.addView(tabCountButton, equalButtonParams())
         return bar
     }
 
@@ -340,8 +351,11 @@ class MainActivity : Activity() {
 
         menu.addView(sectionLabel("BROWSE"), menuLabelParams())
         menu.addView(menuItem("Home", "Return to Astra start page") { showHome() })
-        menu.addView(menuItem("New tab", "Multiple tabs are not available yet") {
-            showComingSoon("Multiple tabs")
+        menu.addView(menuItem("New tab", "Open a separate browser tab") {
+            createTab(switchTo = true)
+        })
+        menu.addView(menuItem("Switch tabs", "View and close open tabs") {
+            showTabsDialog()
         })
         menu.addView(menuItem("Bookmarks", "Saved pages") { showComingSoon("Bookmarks") })
         menu.addView(menuItem("History", "Recently visited pages") { showComingSoon("History") })
@@ -468,19 +482,25 @@ class MainActivity : Activity() {
             return
         }
         addressBar.setText(destination)
+        currentTab.url = destination
+        currentTab.isHome = false
         showingHome = false
         homeView.visibility = View.GONE
         geckoView.visibility = View.VISIBLE
-        session.loadUri(destination)
+        geckoView.setSession(currentTab.session)
+        currentTab.session.loadUri(destination)
     }
 
     private fun showHome() {
         closeMenu()
+        currentTab.isHome = true
+        currentTab.url = null
         showingHome = true
         homeView.visibility = View.VISIBLE
         geckoView.visibility = View.GONE
         addressBar.setText("")
         homeSearch.setText("")
+        updateTabCount()
     }
 
     private fun openMenu() {
@@ -521,16 +541,132 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
+    private fun createTab(switchTo: Boolean) {
+        val newSession = GeckoSession()
+        newSession.open(runtime)
+        tabs.add(BrowserTab(session = newSession))
+        if (switchTo) {
+            switchToTab(tabs.lastIndex)
+        } else {
+            updateTabCount()
+        }
+    }
+
+    private fun switchToTab(index: Int) {
+        if (index !in tabs.indices) return
+        currentTabIndex = index
+        val tab = currentTab
+        geckoView.setSession(tab.session)
+        showingHome = tab.isHome
+        homeView.visibility = if (tab.isHome) View.VISIBLE else View.GONE
+        geckoView.visibility = if (tab.isHome) View.GONE else View.VISIBLE
+        addressBar.setText(tab.url.orEmpty())
+        homeSearch.setText("")
+        updateTabCount()
+    }
+
+    private fun closeTabAt(index: Int) {
+        if (index !in tabs.indices) return
+
+        val wasCurrent = index == currentTabIndex
+        val closing = tabs.removeAt(index)
+        closing.session.close()
+
+        if (tabs.isEmpty()) {
+            currentTabIndex = 0
+            createTab(switchTo = true)
+            return
+        }
+
+        if (index < currentTabIndex) currentTabIndex--
+        if (wasCurrent && currentTabIndex >= tabs.size) {
+            currentTabIndex = tabs.lastIndex
+        }
+        switchToTab(currentTabIndex)
+    }
+
+    private fun updateTabCount() {
+        if (::tabCountButton.isInitialized) {
+            tabCountButton.text = "▢ ${tabs.size}"
+            tabCountButton.contentDescription = "Show ${tabs.size} open tabs"
+        }
+    }
+
+    private fun showTabsDialog() {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Open tabs · ${tabs.size}")
+            .setView(panel)
+            .setNegativeButton("Done", null)
+            .setPositiveButton("New tab", null)
+            .create()
+
+        tabs.forEachIndexed { index, tab ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8), dp(4), dp(4), dp(4))
+                background = rounded(panelColor, 12)
+            }
+            val label = TextView(this).apply {
+                val tabName = tab.url ?: "Astra start page"
+                text = (if (index == currentTabIndex) "●  " else "○  ") + tabName
+                textSize = 13f
+                maxLines = 1
+                setTextColor(if (index == currentTabIndex) accentColor else primaryText)
+                setPadding(dp(6), 0, dp(4), 0)
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    dialog.dismiss()
+                    switchToTab(index)
+                }
+            }
+            val close = TextView(this).apply {
+                text = "×"
+                textSize = 24f
+                gravity = Gravity.CENTER
+                setTextColor(primaryText)
+                contentDescription = "Close tab"
+                isClickable = true
+                isFocusable = true
+                setPadding(dp(12), 0, dp(12), 0)
+                setOnClickListener {
+                    dialog.dismiss()
+                    closeTabAt(index)
+                    showTabsDialog()
+                }
+            }
+            row.addView(label, LinearLayout.LayoutParams(0, dp(48), 1f))
+            row.addView(close, LinearLayout.LayoutParams(dp(44), dp(48)))
+            panel.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)
+            ).apply { bottomMargin = dp(6) })
+        }
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                dialog.dismiss()
+                createTab(switchTo = true)
+            }
+        }
+        dialog.show()
+    }
+
     override fun onBackPressed() {
         when {
             menuOpen -> closeMenu()
-            !showingHome -> session.goBack()
+            !currentTab.isHome -> currentTab.session.goBack()
             else -> super.onBackPressed()
         }
     }
 
     override fun onDestroy() {
-        if (::session.isInitialized) session.close()
+        tabs.forEach { tab -> tab.session.close() }
+        tabs.clear()
         super.onDestroy()
     }
 }
