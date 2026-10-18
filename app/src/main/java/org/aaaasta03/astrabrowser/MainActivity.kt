@@ -2,10 +2,13 @@ package org.aaaasta03.astrabrowser
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.net.Uri
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -18,10 +21,15 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.content.SharedPreferences
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
+import org.mozilla.geckoview.WebResponse
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.DateFormat
 import java.util.Date
+import java.io.File
+import java.net.URLDecoder
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
@@ -66,6 +74,9 @@ class MainActivity : Activity() {
 
     private data class HistoryItem(val url: String, val visitedAt: Long)
     private val history = mutableListOf<HistoryItem>()
+
+    private data class DownloadItem(val name: String, val bytes: Long, val completedAt: Long)
+    private val downloads = mutableListOf<DownloadItem>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -376,7 +387,7 @@ class MainActivity : Activity() {
         })
         menu.addView(menuItem("Bookmarks", "Saved pages") { showBookmarksDialog() })
         menu.addView(menuItem("History", "Recently visited pages") { showHistoryDialog() })
-        menu.addView(menuItem("Downloads", "Downloaded files") { showComingSoon("Downloads") })
+        menu.addView(menuItem("Downloads", "View and open downloaded files") { showDownloadsDialog() })
 
         menu.addView(sectionLabel("PRIVACY & TOOLS"), menuLabelParams().apply {
             topMargin = dp(22)
@@ -584,6 +595,22 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
             history.clear()
         }
+
+        downloads.clear()
+        try {
+            val savedDownloads = JSONArray(browserPrefs.getString("downloads", "[]"))
+            for (i in 0 until savedDownloads.length()) {
+                val item = savedDownloads.optJSONObject(i) ?: continue
+                val name = safeDownloadFileName(item.optString("name"))
+                val file = File(downloadDirectory(), name)
+                val completedAt = item.optLong("completedAt", 0L)
+                if (file.isFile && completedAt > 0L) {
+                    downloads.add(DownloadItem(name, file.length(), completedAt))
+                }
+            }
+        } catch (_: Exception) {
+            downloads.clear()
+        }
     }
 
     private fun persistBookmarks() {
@@ -605,6 +632,245 @@ class MainActivity : Activity() {
         history.add(0, HistoryItem(url, System.currentTimeMillis()))
         while (history.size > 200) history.removeAt(history.lastIndex)
         persistHistory()
+    }
+
+    private fun persistDownloads() {
+        val data = JSONArray()
+        downloads.forEach { item ->
+            data.put(JSONObject()
+                .put("name", item.name)
+                .put("bytes", item.bytes)
+                .put("completedAt", item.completedAt))
+        }
+        browserPrefs.edit().putString("downloads", data.toString()).apply()
+    }
+
+    private fun downloadDirectory(): File =
+        File(filesDir, "downloads").apply { if (!exists()) mkdirs() }
+
+    private fun suggestedDownloadName(response: WebResponse): String {
+        val disposition = response.headers.entries.firstOrNull {
+            it.key.equals("content-disposition", ignoreCase = true)
+        }?.value.orEmpty()
+        val declaredName = Regex(
+            """filename\*?=(?:UTF-8'')?["']?([^;"']+)""",
+            RegexOption.IGNORE_CASE
+        ).find(disposition)?.groupValues?.getOrNull(1)?.trim()
+        val decodedName = declaredName?.let {
+            try { URLDecoder.decode(it, "UTF-8") } catch (_: Exception) { it }
+        }
+        val uriName = Uri.parse(response.uri).lastPathSegment
+        return safeDownloadFileName(decodedName?.takeIf { it.isNotBlank() } ?: uriName.orEmpty())
+            .ifBlank { "download-${System.currentTimeMillis()}" }
+    }
+
+    private fun safeDownloadFileName(candidate: String): String {
+        val lastPart = candidate.substringAfterLast('/').substringAfterLast('\\')
+        val safe = lastPart
+            .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+            .trim()
+            .trim('.')
+            .take(120)
+        return safe.ifBlank { "download-${System.currentTimeMillis()}" }
+    }
+
+    private fun handleExternalResponse(response: WebResponse) {
+        val body = response.body
+        if (body == null) {
+            Toast.makeText(this, "This download has no response body", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val fileName = suggestedDownloadName(response)
+        val sourceHost = Uri.parse(response.uri).host ?: "web content"
+        AlertDialog.Builder(this)
+            .setTitle("Download file?")
+            .setMessage("$fileName\n\nFrom: $sourceHost\n\nOnly save files you trust.")
+            .setNegativeButton("Cancel") { _, _ ->
+                try { body.close() } catch (_: Exception) { }
+            }
+            .setPositiveButton("Download") { _, _ ->
+                startDownload(response, fileName)
+            }
+            .setOnCancelListener {
+                try { body.close() } catch (_: Exception) { }
+            }
+            .show()
+    }
+
+    private fun startDownload(response: WebResponse, suggestedName: String) {
+        val body = response.body
+        if (body == null) {
+            Toast.makeText(this, "Download failed: response body unavailable", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val directory = downloadDirectory()
+        val base = safeDownloadFileName(suggestedName)
+        val dot = base.lastIndexOf('.')
+        val stem = if (dot > 0) base.substring(0, dot) else base
+        val extension = if (dot > 0) base.substring(dot) else ""
+        var target = File(directory, base)
+        var suffix = 1
+        while (target.exists()) {
+            target = File(directory, "$stem ($suffix)$extension")
+            suffix++
+        }
+        val finalFile = target
+        val temporaryFile = File(directory, ".${finalFile.name}.part")
+
+        Toast.makeText(this, "Downloading ${finalFile.name}…", Toast.LENGTH_SHORT).show()
+        Thread({
+            try {
+                temporaryFile.outputStream().buffered().use { output ->
+                    body.use { input -> input.copyTo(output) }
+                }
+                if (!temporaryFile.renameTo(finalFile)) {
+                    temporaryFile.copyTo(finalFile, overwrite = false)
+                    temporaryFile.delete()
+                }
+                val item = DownloadItem(
+                    name = finalFile.name,
+                    bytes = finalFile.length(),
+                    completedAt = System.currentTimeMillis()
+                )
+                runOnUiThread {
+                    downloads.removeAll { it.name == item.name }
+                    downloads.add(0, item)
+                    while (downloads.size > 100) {
+                        val removed = downloads.removeAt(downloads.lastIndex)
+                        File(directory, removed.name).delete()
+                    }
+                    persistDownloads()
+                    Toast.makeText(this, "Saved ${item.name}", Toast.LENGTH_LONG).show()
+                }
+            } catch (error: Exception) {
+                try { body.close() } catch (_: Exception) { }
+                temporaryFile.delete()
+                runOnUiThread {
+                    Toast.makeText(this, "Download failed: ${error.localizedMessage ?: "I/O error"}",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }, "AstraDownload").start()
+    }
+
+    private fun showDownloadsDialog() {
+        lateinit var dialog: AlertDialog
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(panel)
+        }
+
+        if (downloads.isEmpty()) {
+            panel.addView(TextView(this).apply {
+                text = "No downloads yet. Files downloaded from pages will appear here."
+                textSize = 14f
+                setTextColor(secondaryText)
+                setPadding(dp(12), dp(18), dp(12), dp(18))
+            })
+        } else {
+            val timeFormat = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+            downloads.toList().forEach { item ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = rounded(panelColor, 12)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { openDownloadedFile(item) }
+                    setOnLongClickListener {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Delete download?")
+                            .setMessage(item.name)
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Delete") { _, _ ->
+                                File(downloadDirectory(), item.name).delete()
+                                downloads.removeAll { it.name == item.name }
+                                persistDownloads()
+                                dialog.dismiss()
+                                showDownloadsDialog()
+                            }
+                            .show()
+                        true
+                    }
+                }
+                row.addView(TextView(this).apply {
+                    text = item.name
+                    textSize = 14f
+                    maxLines = 2
+                    setTextColor(primaryText)
+                })
+                row.addView(TextView(this).apply {
+                    text = "${formatBytes(item.bytes)} · ${timeFormat.format(Date(item.completedAt))}"
+                    textSize = 11f
+                    setTextColor(secondaryText)
+                }, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) })
+                panel.addView(row, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) })
+            }
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Downloads · ${downloads.size}")
+            .setView(scroll)
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Clear all", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                AlertDialog.Builder(this)
+                    .setTitle("Delete all downloaded files?")
+                    .setMessage("This deletes files saved by Astra in its private download storage.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Delete all") { _, _ ->
+                        downloads.toList().forEach { File(downloadDirectory(), it.name).delete() }
+                        downloads.clear()
+                        persistDownloads()
+                        dialog.dismiss()
+                        showDownloadsDialog()
+                    }
+                    .show()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun openDownloadedFile(item: DownloadItem) {
+        val file = File(downloadDirectory(), item.name)
+        if (!file.isFile) {
+            downloads.removeAll { it.name == item.name }
+            persistDownloads()
+            Toast.makeText(this, "File no longer exists", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val extension = item.name.substringAfterLast('.', "").lowercase()
+            val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                ?: "application/octet-stream"
+            val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mimeType)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(intent, "Open download"))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "No app can open this file type", Toast.LENGTH_LONG).show()
+        } catch (error: Exception) {
+            Toast.makeText(this, "Unable to open file: ${error.localizedMessage ?: "error"}",
+                Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
+        else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
     }
 
     private fun bookmarkCurrentPage() {
@@ -772,6 +1038,11 @@ class MainActivity : Activity() {
     private fun createTab(switchTo: Boolean) {
         val newSession = GeckoSession()
         newSession.open(runtime)
+        newSession.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                handleExternalResponse(response)
+            }
+        }
         tabs.add(BrowserTab(session = newSession))
         if (switchTo) {
             switchToTab(tabs.lastIndex)
