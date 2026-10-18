@@ -416,6 +416,9 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Share current page", "Send this page to another app") {
             shareCurrentPage()
         })
+        menu.addView(menuItem("Find in page", "Search for text on this webpage") {
+            showFindInPageDialog()
+        })
         menu.addView(menuItem("Bookmarks", "Saved pages") { showBookmarksDialog() })
         menu.addView(menuItem("History", "Recently visited pages") { showHistoryDialog() })
         menu.addView(menuItem("Downloads", "View and open downloaded files") { showDownloadsDialog() })
@@ -1029,6 +1032,104 @@ class MainActivity : Activity() {
             putExtra(Intent.EXTRA_SUBJECT, url)
         }
         startActivity(Intent.createChooser(shareIntent, "Share page"))
+    }
+
+    private fun showFindInPageDialog() {
+        if (currentTab.isHome || !isWebUrl(currentTab.url)) {
+            Toast.makeText(this, "Open a webpage before searching its text", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val finder = currentTab.session.finder
+        val searchField = EditText(this).apply {
+            hint = "Find on this page"
+            setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            textSize = 16f
+            setTextColor(primaryText)
+            setHintTextColor(secondaryText)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = rounded(fieldColor, 14)
+        }
+        val resultLabel = TextView(this).apply {
+            text = "Enter text, then tap Next or Previous."
+            textSize = 13f
+            setTextColor(secondaryText)
+            setPadding(dp(4), dp(10), dp(4), dp(4))
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), dp(8))
+            addView(searchField, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(50)
+            ))
+            addView(resultLabel, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+
+        finder.setDisplayFlags(GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Find in page")
+            .setView(content)
+            .setNegativeButton("Close", null)
+            .setNeutralButton("Previous", null)
+            .setPositiveButton("Next", null)
+            .create()
+
+        val runSearch: (Int) -> Unit = { flags ->
+            val query = searchField.text?.toString().orEmpty()
+            if (query.isBlank()) {
+                finder.clear()
+                resultLabel.text = "Enter text to find."
+            } else {
+                finder.find(query, flags).accept(
+                    { result ->
+                        runOnUiThread {
+                            if (dialog.isShowing) {
+                                resultLabel.text = when {
+                                    !result.found -> "No matches found"
+                                    result.total > 0 -> "Match \${result.current} of \${result.total}"
+                                    result.current > 0 -> "Match \${result.current}"
+                                    else -> "Searching…"
+                                }
+                            }
+                        }
+                    },
+                    { error ->
+                        runOnUiThread {
+                            if (dialog.isShowing) {
+                                resultLabel.text =
+                                    "Search failed: \${error?.localizedMessage ?: "unknown error"}"
+                            }
+                        }
+                    }
+                )
+            }
+        }
+
+        searchField.setOnEditorActionListener { _, actionId, event ->
+            val enterPressed = event?.keyCode == KeyEvent.KEYCODE_ENTER &&
+                event.action == KeyEvent.ACTION_DOWN
+            if (actionId == EditorInfo.IME_ACTION_SEARCH || enterPressed) {
+                runSearch(GeckoSession.FINDER_FIND_FORWARD)
+                true
+            } else {
+                false
+            }
+        }
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                runSearch(GeckoSession.FINDER_FIND_FORWARD)
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                runSearch(GeckoSession.FINDER_FIND_BACKWARDS)
+            }
+        }
+        dialog.setOnDismissListener { finder.clear() }
+        dialog.show()
+        searchField.requestFocus()
     }
 
     private fun bookmarkCurrentPage() {
