@@ -34,6 +34,22 @@ class UrlNormalizerTest {
     }
 
     @Test
+    fun searchesUnsupportedSchemesInsteadOfOpeningThem() {
+        assertEquals(
+            "https://duckduckgo.com/?q=mailto%3Atest%40example.com",
+            UrlNormalizer.normalize("mailto:test@example.com")
+        )
+    }
+
+    @Test
+    fun encodesSearchSpecialCharacters() {
+        assertEquals(
+            "https://duckduckgo.com/?q=hello%20%26%20goodbye%3F",
+            UrlNormalizer.normalize("hello & goodbye?")
+        )
+    }
+
+    @Test
     fun emptyInputStaysEmpty() {
         assertEquals("", UrlNormalizer.normalize("   "))
     }
