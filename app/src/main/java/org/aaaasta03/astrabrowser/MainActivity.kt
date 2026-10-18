@@ -10,6 +10,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.net.Uri
 import android.view.Gravity
 import android.view.KeyEvent
@@ -1379,25 +1381,59 @@ class MainActivity : Activity() {
 
     private fun showHistoryDialog() {
         lateinit var dialog: AlertDialog
-        val panel = LinearLayout(this).apply {
+
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val searchField = EditText(this).apply {
+            hint = "Search history by URL"
+            setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            textSize = 14f
+            setTextColor(primaryText)
+            setHintTextColor(secondaryText)
+            setPadding(dp(14), 0, dp(12), 0)
+            background = rounded(fieldColor, 14)
+        }
+        content.addView(searchField, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(48)
+        ).apply { bottomMargin = dp(8) })
+
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
         }
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             addView(panel)
         }
+        content.addView(scroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(320)
+        ))
 
-        if (history.isEmpty()) {
-            panel.addView(TextView(this).apply {
-                text = "No browsing history yet. Pages you open will appear here."
-                textSize = 14f
-                setTextColor(secondaryText)
-                setPadding(dp(12), dp(18), dp(12), dp(18))
-            })
-        } else {
-            val timeFormat = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-            history.toList().forEach { item ->
+        val timeFormat = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+        fun renderHistory(query: String) {
+            panel.removeAllViews()
+            val trimmedQuery = query.trim()
+            val entries = history.toList().filter { item ->
+                trimmedQuery.isEmpty() || item.url.contains(trimmedQuery, ignoreCase = true)
+            }
+
+            if (entries.isEmpty()) {
+                panel.addView(TextView(this).apply {
+                    text = when {
+                        history.isEmpty() -> "No browsing history yet. Pages you open will appear here."
+                        trimmedQuery.isNotEmpty() -> "No history matches \"$trimmedQuery\"."
+                        else -> "No browsing history yet."
+                    }
+                    textSize = 14f
+                    setTextColor(secondaryText)
+                    setPadding(dp(12), dp(18), dp(12), dp(18))
+                })
+                return
+            }
+
+            entries.forEach { item ->
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -1407,6 +1443,20 @@ class MainActivity : Activity() {
                     setOnClickListener {
                         dialog.dismiss()
                         loadAddress(item.url)
+                    }
+                    setOnLongClickListener {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Remove history entry?")
+                            .setMessage(item.url)
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Remove") { _, _ ->
+                                history.removeAll { it.url == item.url }
+                                persistHistory()
+                                dialog.setTitle("History · ${history.size}")
+                                renderHistory(searchField.text?.toString().orEmpty())
+                            }
+                            .show()
+                        true
                     }
                 }
                 row.addView(TextView(this).apply {
@@ -1430,7 +1480,7 @@ class MainActivity : Activity() {
 
         dialog = AlertDialog.Builder(this)
             .setTitle("History · ${history.size}")
-            .setView(scroll)
+            .setView(content)
             .setNegativeButton("Close", null)
             .setPositiveButton("Clear history", null)
             .create()
@@ -1443,12 +1493,21 @@ class MainActivity : Activity() {
                     .setPositiveButton("Clear") { _, _ ->
                         history.clear()
                         persistHistory()
-                        dialog.dismiss()
-                        showHistoryDialog()
+                        dialog.setTitle("History · 0")
+                        renderHistory("")
                     }
                     .show()
             }
         }
+        searchField.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                renderHistory(s?.toString().orEmpty())
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
+        renderHistory("")
         dialog.show()
     }
 
