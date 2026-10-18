@@ -3,6 +3,8 @@ package org.aaaasta03.astrabrowser
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -418,6 +420,9 @@ class MainActivity : Activity() {
         })
         menu.addView(menuItem("Share current page", "Send this page to another app") {
             shareCurrentPage()
+        })
+        menu.addView(menuItem("Copy page address", "Copy the current URL to clipboard") {
+            copyCurrentPageAddress()
         })
         menu.addView(menuItem("Find in page", "Search for text on this webpage") {
             showFindInPageDialog()
@@ -1053,6 +1058,18 @@ class MainActivity : Activity() {
             if (enabled) "Desktop site enabled for this tab" else "Desktop site disabled for this tab",
             Toast.LENGTH_SHORT
         ).show()
+    }
+
+    private fun copyCurrentPageAddress() {
+        val url = currentTab.url
+        if (!isWebUrl(url)) {
+            Toast.makeText(this, "Open a webpage before copying its address", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Page address", url))
+        Toast.makeText(this, "Page address copied", Toast.LENGTH_SHORT).show()
     }
 
     private fun shareCurrentPage() {
