@@ -23,15 +23,16 @@ The current dependency is pinned to `org.mozilla.geckoview:geckoview:158.0.20261
 ### Android targets
 
 - `minSdk = 26` — Android 8.0 or later.
-- `compileSdk = 36` and `targetSdk = 36` — Android 16 target.
-- The app's NDK ABI filter is `arm64-v8a`.
-- Java source/target and Kotlin bytecode target use Java 17.
+- `compileSdk = 37` — Android API 37, required by the selected AndroidX Core dependency.
+- `targetSdk = 36` — Android 16 target; this remains deliberately separate from compile SDK.
+- The app's ABI filter is `arm64-v8a`.
+- Java source/target compatibility uses Java 17. AGP 9.1 provides built-in Kotlin support, so the separate Kotlin Android plugin is not applied.
 
 A target SDK is not a maximum supported OS version. Avoid `maxSdkVersion` unless there is a well-justified compatibility reason.
 
 ### Build system
 
-The repository uses Android Gradle Plugin 8.13.2 and Kotlin Gradle Plugin 2.2.20 with Gradle 8.13. The CI job installs these build tools and runs JVM tests before assembling the APK. A Gradle Wrapper should be generated and committed once a build environment is available.
+The repository uses Android Gradle Plugin 9.1.1 with Gradle 9.3.1 and Java 17. AGP 9's built-in Kotlin support replaces the separate `org.jetbrains.kotlin.android` plugin; the build files intentionally avoid applying both. The CI job installs the Android 37 platform and runs JVM tests before assembling the APK. A Gradle Wrapper should be generated and committed once a build environment is available.
 
 ## Privacy and security backlog
 
