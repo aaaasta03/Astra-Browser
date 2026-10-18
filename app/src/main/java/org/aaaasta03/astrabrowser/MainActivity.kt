@@ -17,10 +17,12 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import org.mozilla.geckoview.WebResponse
@@ -57,6 +59,7 @@ class MainActivity : Activity() {
         get() = tabs[currentTabIndex]
     private lateinit var homeSearch: EditText
     private lateinit var geckoView: GeckoView
+    private lateinit var loadingProgressBar: ProgressBar
     private lateinit var homeView: View
     private lateinit var menuScrim: View
     private lateinit var menuPanel: View
@@ -113,6 +116,23 @@ class MainActivity : Activity() {
         content.addView(homeView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+        loadingProgressBar = ProgressBar(
+            this,
+            null,
+            android.R.attr.progressBarStyleHorizontal
+        ).apply {
+            max = 100
+            progress = 0
+            visibility = View.GONE
+            progressTintList = ColorStateList.valueOf(accentColor)
+            progressBackgroundTintList = ColorStateList.valueOf(fieldColor)
+            contentDescription = "Page loading progress"
+        }
+        content.addView(loadingProgressBar, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            dp(3),
+            Gravity.TOP
         ))
         column.addView(content, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
@@ -1143,7 +1163,26 @@ class MainActivity : Activity() {
             }
         }
         newSession.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onPageStart(session: GeckoSession, url: String) {
+                if (tabs.getOrNull(currentTabIndex)?.session !== session) return
+                loadingProgressBar.progress = 0
+                loadingProgressBar.visibility = View.VISIBLE
+            }
+
+            override fun onProgressChange(session: GeckoSession, progress: Int) {
+                if (tabs.getOrNull(currentTabIndex)?.session !== session) return
+                loadingProgressBar.progress = progress.coerceIn(0, 100)
+                if (progress in 1..99) {
+                    loadingProgressBar.visibility = View.VISIBLE
+                } else if (progress >= 100) {
+                    loadingProgressBar.visibility = View.GONE
+                }
+            }
+
             override fun onPageStop(session: GeckoSession, success: Boolean) {
+                if (tabs.getOrNull(currentTabIndex)?.session === session) {
+                    loadingProgressBar.visibility = View.GONE
+                }
                 if (!success) return
                 val tab = tabs.firstOrNull { it.session === session } ?: return
                 val url = tab.url ?: return
@@ -1165,6 +1204,7 @@ class MainActivity : Activity() {
         currentTabIndex = index
         val tab = currentTab
         geckoView.setSession(tab.session)
+        loadingProgressBar.visibility = View.GONE
         showingHome = tab.isHome
         homeView.visibility = if (tab.isHome) View.VISIBLE else View.GONE
         geckoView.visibility = if (tab.isHome) View.GONE else View.VISIBLE
