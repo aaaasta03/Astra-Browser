@@ -295,16 +295,16 @@ class MainActivity : Activity() {
             setBackgroundColor(panelColor)
         }
         bar.addView(iconButton("‹", "Go back") {
-            if (!showingHome) session.navigationController.goBack()
+            if (!showingHome) session.goBack()
         }, equalButtonParams())
         bar.addView(iconButton("›", "Go forward") {
-            if (!showingHome) session.navigationController.goForward()
+            if (!showingHome) session.goForward()
         }, equalButtonParams())
         bar.addView(iconButton("⌂", "Home") {
             showHome()
         }, equalButtonParams())
         bar.addView(iconButton("↻", "Reload page") {
-            if (!showingHome) session.navigationController.reload() else homeSearch.requestFocus()
+            if (!showingHome) session.reload() else homeSearch.requestFocus()
         }, equalButtonParams())
         bar.addView(iconButton("☷", "Open browser menu") {
             openMenu()
@@ -524,7 +524,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when {
             menuOpen -> closeMenu()
-            !showingHome -> session.navigationController.goBack()
+            !showingHome -> session.goBack()
             else -> super.onBackPressed()
         }
     }
