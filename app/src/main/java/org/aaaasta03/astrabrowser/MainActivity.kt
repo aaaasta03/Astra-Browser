@@ -35,6 +35,7 @@ import java.net.URLDecoder
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.StorageController
 
@@ -53,7 +54,8 @@ class MainActivity : Activity() {
         var url: String? = null,
         var isHome: Boolean = true,
         var isLoading: Boolean = false,
-        var loadProgress: Int = 0
+        var loadProgress: Int = 0,
+        var isDesktopMode: Boolean = false
     )
 
     private val tabs = mutableListOf<BrowserTab>()
@@ -418,6 +420,9 @@ class MainActivity : Activity() {
         })
         menu.addView(menuItem("Find in page", "Search for text on this webpage") {
             showFindInPageDialog()
+        })
+        menu.addView(menuItem("Desktop site", "Switch the current tab to desktop layout") {
+            toggleDesktopSite()
         })
         menu.addView(menuItem("Bookmarks", "Saved pages") { showBookmarksDialog() })
         menu.addView(menuItem("History", "Recently visited pages") { showHistoryDialog() })
@@ -1019,6 +1024,36 @@ class MainActivity : Activity() {
         else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
     }
 
+    private fun applyDesktopMode(tab: BrowserTab, enabled: Boolean) {
+        tab.isDesktopMode = enabled
+        val settings = tab.session.settings
+        settings.setUserAgentMode(
+            if (enabled) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+            else GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+        )
+        settings.setViewportMode(
+            if (enabled) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+            else GeckoSessionSettings.VIEWPORT_MODE_MOBILE
+        )
+    }
+
+    private fun toggleDesktopSite() {
+        if (currentTab.isHome || !isWebUrl(currentTab.url)) {
+            Toast.makeText(this, "Open a webpage before switching site layout", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val enabled = !currentTab.isDesktopMode
+        applyDesktopMode(currentTab, enabled)
+        persistOpenTabsIfReady()
+        currentTab.session.reload()
+        Toast.makeText(
+            this,
+            if (enabled) "Desktop site enabled for this tab" else "Desktop site disabled for this tab",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
     private fun shareCurrentPage() {
         val url = currentTab.url
         if (!isWebUrl(url)) {
@@ -1316,14 +1351,20 @@ class MainActivity : Activity() {
             JSONArray()
         }
 
-        val restoredUrls = mutableListOf<String?>()
+        // Accept the previous URL/null format and the newer object format.
+        val restoredTabs = mutableListOf<Pair<String?, Boolean>>()
         for (i in 0 until minOf(savedTabs.length(), maxOpenTabs)) {
             val value = savedTabs.opt(i)
-            val url = (value as? String)?.takeIf { isWebUrl(it) }
-            restoredUrls.add(url)
+            if (value is JSONObject) {
+                val url = value.optString("url").takeIf { isWebUrl(it) }
+                restoredTabs.add(url to value.optBoolean("desktop", false))
+            } else {
+                val url = (value as? String)?.takeIf { isWebUrl(it) }
+                restoredTabs.add(url to false)
+            }
         }
 
-        if (restoredUrls.isEmpty()) {
+        if (restoredTabs.isEmpty()) {
             createTab(switchTo = true)
             return
         }
@@ -1331,9 +1372,10 @@ class MainActivity : Activity() {
         val requestedIndex = browserPrefs.getInt("selected_tab", 0)
         restoringTabs = true
         try {
-            restoredUrls.forEach { url ->
+            restoredTabs.forEach { (url, desktopMode) ->
                 createTab(switchTo = false)
                 val tab = tabs.lastOrNull() ?: return@forEach
+                applyDesktopMode(tab, desktopMode)
                 if (url != null) {
                     tab.url = url
                     tab.isHome = false
@@ -1356,7 +1398,12 @@ class MainActivity : Activity() {
         if (!::browserPrefs.isInitialized || restoringTabs) return
         val data = JSONArray()
         tabs.take(maxOpenTabs).forEach { tab ->
-            data.put(if (tab.isHome || !isWebUrl(tab.url)) JSONObject.NULL else tab.url)
+            val savedUrl: Any = if (tab.isHome || !isWebUrl(tab.url)) JSONObject.NULL else tab.url!!
+            data.put(
+                JSONObject()
+                    .put("url", savedUrl)
+                    .put("desktop", tab.isDesktopMode)
+            )
         }
         val selected = if (tabs.isEmpty()) 0 else currentTabIndex.coerceIn(0, tabs.lastIndex)
         browserPrefs.edit()
