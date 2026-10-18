@@ -1127,6 +1127,7 @@ class MainActivity : Activity() {
                 if (!url.startsWith("https://") && !url.startsWith("http://")) return
 
                 val tab = tabs.firstOrNull { it.session === session } ?: return
+                val urlChanged = tab.url != url
                 tab.url = url
                 tab.isHome = false
                 if (tabs.getOrNull(currentTabIndex) === tab) {
@@ -1135,6 +1136,10 @@ class MainActivity : Activity() {
                     homeView.visibility = View.GONE
                     geckoView.visibility = View.VISIBLE
                 }
+
+                // Single-page apps (such as YouTube) can change the URL without a new
+                // page-stop event. Save changed locations here so History matches the bar.
+                if (urlChanged) recordHistory(url)
             }
         }
         newSession.progressDelegate = object : GeckoSession.ProgressDelegate {
