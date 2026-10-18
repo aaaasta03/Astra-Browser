@@ -57,7 +57,9 @@ class MainActivity : Activity() {
     )
 
     private val tabs = mutableListOf<BrowserTab>()
+    private val maxOpenTabs = 10
     private var currentTabIndex = 0
+    private var restoringTabs = false
     private val currentTab: BrowserTab
         get() = tabs[currentTabIndex]
     private lateinit var homeSearch: EditText
@@ -171,7 +173,7 @@ class MainActivity : Activity() {
         loadBrowserLibrary()
 
         runtime = GeckoRuntime.create(applicationContext)
-        createTab(switchTo = true)
+        restoreOpenTabs()
     }
 
     private fun buildTopBar(): View {
@@ -585,6 +587,7 @@ class MainActivity : Activity() {
         addressBar.setText("")
         homeSearch.setText("")
         updateTabCount()
+        persistOpenTabsIfReady()
     }
 
     private fun openMenu() {
@@ -644,6 +647,7 @@ class MainActivity : Activity() {
         sessionsToClose.forEach { it.session.close() }
         tabs.clear()
         currentTabIndex = 0
+        persistOpenTabsIfReady()
 
         history.clear()
         persistHistory()
@@ -1159,7 +1163,80 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
+    private fun isWebUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        return try {
+            val uri = Uri.parse(url)
+            (uri.scheme.equals("http", ignoreCase = true) ||
+                uri.scheme.equals("https", ignoreCase = true)) &&
+                !uri.host.isNullOrBlank()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun restoreOpenTabs() {
+        val savedTabs = try {
+            JSONArray(browserPrefs.getString("open_tabs", "[]"))
+        } catch (_: Exception) {
+            JSONArray()
+        }
+
+        val restoredUrls = mutableListOf<String?>()
+        for (i in 0 until minOf(savedTabs.length(), maxOpenTabs)) {
+            val value = savedTabs.opt(i)
+            val url = (value as? String)?.takeIf { isWebUrl(it) }
+            restoredUrls.add(url)
+        }
+
+        if (restoredUrls.isEmpty()) {
+            createTab(switchTo = true)
+            return
+        }
+
+        val requestedIndex = browserPrefs.getInt("selected_tab", 0)
+        restoringTabs = true
+        try {
+            restoredUrls.forEach { url ->
+                createTab(switchTo = false)
+                val tab = tabs.lastOrNull() ?: return@forEach
+                if (url != null) {
+                    tab.url = url
+                    tab.isHome = false
+                    tab.session.loadUri(url)
+                }
+            }
+        } finally {
+            restoringTabs = false
+        }
+
+        if (tabs.isEmpty()) {
+            createTab(switchTo = true)
+        } else {
+            switchToTab(requestedIndex.coerceIn(0, tabs.lastIndex))
+        }
+        persistOpenTabsIfReady()
+    }
+
+    private fun persistOpenTabsIfReady() {
+        if (!::browserPrefs.isInitialized || restoringTabs) return
+        val data = JSONArray()
+        tabs.take(maxOpenTabs).forEach { tab ->
+            data.put(if (tab.isHome || !isWebUrl(tab.url)) JSONObject.NULL else tab.url)
+        }
+        val selected = if (tabs.isEmpty()) 0 else currentTabIndex.coerceIn(0, tabs.lastIndex)
+        browserPrefs.edit()
+            .putString("open_tabs", data.toString())
+            .putInt("selected_tab", selected)
+            .apply()
+    }
+
     private fun createTab(switchTo: Boolean) {
+        if (tabs.size >= maxOpenTabs) {
+            Toast.makeText(this, "Astra supports up to $maxOpenTabs open tabs", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val newSession = GeckoSession()
         newSession.open(runtime)
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
@@ -1190,7 +1267,10 @@ class MainActivity : Activity() {
 
                 // Single-page apps (such as YouTube) can change the URL without a new
                 // page-stop event. Save changed locations here so History matches the bar.
-                if (urlChanged) recordHistory(url)
+                if (urlChanged) {
+                    recordHistory(url)
+                    persistOpenTabsIfReady()
+                }
             }
         }
         newSession.progressDelegate = object : GeckoSession.ProgressDelegate {
@@ -1254,6 +1334,7 @@ class MainActivity : Activity() {
         addressBar.setText(tab.url.orEmpty())
         homeSearch.setText("")
         updateTabCount()
+        persistOpenTabsIfReady()
     }
 
     private fun closeTabAt(index: Int) {
@@ -1356,6 +1437,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        persistOpenTabsIfReady()
         tabs.forEach { tab -> tab.session.close() }
         tabs.clear()
         super.onDestroy()
