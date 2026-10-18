@@ -17,6 +17,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.content.SharedPreferences
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.DateFormat
+import java.util.Date
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
@@ -55,6 +60,12 @@ class MainActivity : Activity() {
     private val primaryText = Color.rgb(242, 246, 245)
     private val secondaryText = Color.rgb(160, 174, 174)
     private val accentColor = Color.rgb(143, 221, 199)
+
+    private lateinit var browserPrefs: SharedPreferences
+    private val bookmarks = mutableListOf<String>()
+
+    private data class HistoryItem(val url: String, val visitedAt: Long)
+    private val history = mutableListOf<HistoryItem>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -119,6 +130,9 @@ class MainActivity : Activity() {
             menuWidth, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END
         ))
         setContentView(root)
+
+        browserPrefs = getSharedPreferences("astra_browser_library", MODE_PRIVATE)
+        loadBrowserLibrary()
 
         runtime = GeckoRuntime.create(applicationContext)
         createTab(switchTo = true)
@@ -357,8 +371,11 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Switch tabs", "View and close open tabs") {
             showTabsDialog()
         })
-        menu.addView(menuItem("Bookmarks", "Saved pages") { showComingSoon("Bookmarks") })
-        menu.addView(menuItem("History", "Recently visited pages") { showComingSoon("History") })
+        menu.addView(menuItem("Bookmark this page", "Save the current address") {
+            bookmarkCurrentPage()
+        })
+        menu.addView(menuItem("Bookmarks", "Saved pages") { showBookmarksDialog() })
+        menu.addView(menuItem("History", "Recently visited pages") { showHistoryDialog() })
         menu.addView(menuItem("Downloads", "Downloaded files") { showComingSoon("Downloads") })
 
         menu.addView(sectionLabel("PRIVACY & TOOLS"), menuLabelParams().apply {
@@ -489,6 +506,7 @@ class MainActivity : Activity() {
         geckoView.visibility = View.VISIBLE
         geckoView.setSession(currentTab.session)
         currentTab.session.loadUri(destination)
+        recordHistory(destination)
     }
 
     private fun showHome() {
@@ -536,6 +554,216 @@ class MainActivity : Activity() {
             )
             .setPositiveButton("OK", null)
             .show()
+    }
+
+    private fun loadBrowserLibrary() {
+        bookmarks.clear()
+        try {
+            val savedBookmarks = JSONArray(browserPrefs.getString("bookmarks", "[]"))
+            for (i in 0 until savedBookmarks.length()) {
+                val url = savedBookmarks.optString(i)
+                if (url.startsWith("https://") || url.startsWith("http://")) {
+                    bookmarks.add(url)
+                }
+            }
+        } catch (_: Exception) {
+            bookmarks.clear()
+        }
+
+        history.clear()
+        try {
+            val savedHistory = JSONArray(browserPrefs.getString("history", "[]"))
+            for (i in 0 until savedHistory.length()) {
+                val item = savedHistory.optJSONObject(i) ?: continue
+                val url = item.optString("url")
+                val time = item.optLong("visitedAt", 0L)
+                if ((url.startsWith("https://") || url.startsWith("http://")) && time > 0L) {
+                    history.add(HistoryItem(url, time))
+                }
+            }
+        } catch (_: Exception) {
+            history.clear()
+        }
+    }
+
+    private fun persistBookmarks() {
+        val data = JSONArray()
+        bookmarks.forEach { data.put(it) }
+        browserPrefs.edit().putString("bookmarks", data.toString()).apply()
+    }
+
+    private fun persistHistory() {
+        val data = JSONArray()
+        history.forEach { item ->
+            data.put(JSONObject().put("url", item.url).put("visitedAt", item.visitedAt))
+        }
+        browserPrefs.edit().putString("history", data.toString()).apply()
+    }
+
+    private fun recordHistory(url: String) {
+        history.removeAll { it.url == url }
+        history.add(0, HistoryItem(url, System.currentTimeMillis()))
+        while (history.size > 200) history.removeAt(history.lastIndex)
+        persistHistory()
+    }
+
+    private fun bookmarkCurrentPage() {
+        val url = currentTab.url
+        if (url.isNullOrBlank()) {
+            Toast.makeText(this, "Open a webpage before bookmarking", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (bookmarks.contains(url)) {
+            Toast.makeText(this, "Already bookmarked", Toast.LENGTH_SHORT).show()
+            return
+        }
+        bookmarks.add(0, url)
+        persistBookmarks()
+        Toast.makeText(this, "Bookmark saved", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showBookmarksDialog() {
+        lateinit var dialog: AlertDialog
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(panel)
+        }
+
+        if (bookmarks.isEmpty()) {
+            panel.addView(TextView(this).apply {
+                text = "No bookmarks yet. Open a page and choose ‘Bookmark this page’ from the menu."
+                textSize = 14f
+                setTextColor(secondaryText)
+                setPadding(dp(12), dp(18), dp(12), dp(18))
+            })
+        } else {
+            bookmarks.toList().forEach { url ->
+                val row = TextView(this).apply {
+                    text = url
+                    textSize = 14f
+                    setTextColor(primaryText)
+                    setPadding(dp(12), dp(14), dp(12), dp(14))
+                    background = rounded(panelColor, 12)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        dialog.dismiss()
+                        loadAddress(url)
+                    }
+                    setOnLongClickListener {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Remove bookmark?")
+                            .setMessage(url)
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Remove") { _, _ ->
+                                bookmarks.remove(url)
+                                persistBookmarks()
+                                dialog.dismiss()
+                                showBookmarksDialog()
+                            }
+                            .show()
+                        true
+                    }
+                }
+                panel.addView(row, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) })
+            }
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Bookmarks · ${bookmarks.size}")
+            .setView(scroll)
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Bookmark current page", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                bookmarkCurrentPage()
+                dialog.dismiss()
+                showBookmarksDialog()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun showHistoryDialog() {
+        lateinit var dialog: AlertDialog
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(panel)
+        }
+
+        if (history.isEmpty()) {
+            panel.addView(TextView(this).apply {
+                text = "No browsing history yet. Pages you open will appear here."
+                textSize = 14f
+                setTextColor(secondaryText)
+                setPadding(dp(12), dp(18), dp(12), dp(18))
+            })
+        } else {
+            val timeFormat = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+            history.toList().forEach { item ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = rounded(panelColor, 12)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        dialog.dismiss()
+                        loadAddress(item.url)
+                    }
+                }
+                row.addView(TextView(this).apply {
+                    text = item.url
+                    textSize = 13f
+                    maxLines = 2
+                    setTextColor(primaryText)
+                })
+                row.addView(TextView(this).apply {
+                    text = timeFormat.format(Date(item.visitedAt))
+                    textSize = 11f
+                    setTextColor(secondaryText)
+                }, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) })
+                panel.addView(row, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) })
+            }
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setTitle("History · ${history.size}")
+            .setView(scroll)
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Clear history", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                AlertDialog.Builder(this)
+                    .setTitle("Clear browsing history?")
+                    .setMessage("This removes the history saved by Astra on this device.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Clear") { _, _ ->
+                        history.clear()
+                        persistHistory()
+                        dialog.dismiss()
+                        showHistoryDialog()
+                    }
+                    .show()
+            }
+        }
+        dialog.show()
     }
 
     private fun dp(value: Int): Int =
