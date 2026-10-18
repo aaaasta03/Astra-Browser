@@ -426,6 +426,18 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Clear browsing data", "Remove cookies, site data, cache and history") {
             showClearBrowsingDataDialog()
         })
+        menu.addView(menuItem("Clear recent history", "Remove visited-page entries only") {
+            AlertDialog.Builder(this)
+                .setTitle("Clear recent history?")
+                .setMessage("This removes saved history entries but keeps cookies, site data, bookmarks, tabs, and downloads.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Clear history") { _, _ ->
+                    history.clear()
+                    persistHistory()
+                    Toast.makeText(this, "Browsing history cleared", Toast.LENGTH_SHORT).show()
+                }
+                .show()
+        })
         menu.addView(menuItem("Extensions", "WebExtensions support is in development") {
             showComingSoon("Extension manager")
         })
