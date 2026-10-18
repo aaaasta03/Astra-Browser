@@ -624,7 +624,7 @@ class MainActivity : Activity() {
                         Toast.makeText(
                             this,
                             "History cleared, but site data could not be fully cleared: " +
-                                (error.localizedMessage ?: "unknown error"),
+                                (error?.localizedMessage ?: "unknown error"),
                             Toast.LENGTH_LONG
                         ).show()
                     }
