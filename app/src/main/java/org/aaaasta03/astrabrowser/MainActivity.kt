@@ -55,7 +55,8 @@ class MainActivity : Activity() {
         var isHome: Boolean = true,
         var isLoading: Boolean = false,
         var loadProgress: Int = 0,
-        var isDesktopMode: Boolean = false
+        var isDesktopMode: Boolean = false,
+        var title: String? = null
     )
 
     private val tabs = mutableListOf<BrowserTab>()
@@ -1352,15 +1353,17 @@ class MainActivity : Activity() {
         }
 
         // Accept the previous URL/null format and the newer object format.
-        val restoredTabs = mutableListOf<Pair<String?, Boolean>>()
+        data class RestoredTab(val url: String?, val desktopMode: Boolean, val title: String?)
+        val restoredTabs = mutableListOf<RestoredTab>()
         for (i in 0 until minOf(savedTabs.length(), maxOpenTabs)) {
             val value = savedTabs.opt(i)
             if (value is JSONObject) {
                 val url = value.optString("url").takeIf { isWebUrl(it) }
-                restoredTabs.add(url to value.optBoolean("desktop", false))
+                val title = value.optString("title").takeIf { it.isNotBlank() }
+                restoredTabs.add(RestoredTab(url, value.optBoolean("desktop", false), title))
             } else {
                 val url = (value as? String)?.takeIf { isWebUrl(it) }
-                restoredTabs.add(url to false)
+                restoredTabs.add(RestoredTab(url, false, null))
             }
         }
 
@@ -1372,10 +1375,12 @@ class MainActivity : Activity() {
         val requestedIndex = browserPrefs.getInt("selected_tab", 0)
         restoringTabs = true
         try {
-            restoredTabs.forEach { (url, desktopMode) ->
+            restoredTabs.forEach { savedTab ->
                 createTab(switchTo = false)
                 val tab = tabs.lastOrNull() ?: return@forEach
-                applyDesktopMode(tab, desktopMode)
+                applyDesktopMode(tab, savedTab.desktopMode)
+                tab.title = savedTab.title
+                val url = savedTab.url
                 if (url != null) {
                     tab.url = url
                     tab.isHome = false
@@ -1403,6 +1408,7 @@ class MainActivity : Activity() {
                 JSONObject()
                     .put("url", savedUrl)
                     .put("desktop", tab.isDesktopMode)
+                    .put("title", tab.title ?: "")
             )
         }
         val selected = if (tabs.isEmpty()) 0 else currentTabIndex.coerceIn(0, tabs.lastIndex)
@@ -1423,6 +1429,12 @@ class MainActivity : Activity() {
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 handleExternalResponse(response)
+            }
+
+            override fun onTitleChange(session: GeckoSession, title: String?) {
+                val tab = tabs.firstOrNull { it.session === session } ?: return
+                tab.title = title?.trim()?.takeIf { it.isNotEmpty() }
+                persistOpenTabsIfReady()
             }
         }
         newSession.navigationDelegate = object : GeckoSession.NavigationDelegate {
@@ -1578,10 +1590,17 @@ class MainActivity : Activity() {
                 background = rounded(panelColor, 12)
             }
             val label = TextView(this).apply {
-                val tabName = tab.url ?: "Astra start page"
-                text = (if (index == currentTabIndex) "●  " else "○  ") + tabName
+                val tabName = tab.title?.takeIf { it.isNotBlank() }
+                    ?: tab.url
+                    ?: "Astra start page"
+                val titleLine = (if (index == currentTabIndex) "●  " else "○  ") + tabName
+                text = if (tab.url.isNullOrBlank()) {
+                    titleLine
+                } else {
+                    "$titleLine\n${tab.url}"
+                }
                 textSize = 13f
-                maxLines = 1
+                maxLines = 2
                 setTextColor(if (index == currentTabIndex) accentColor else primaryText)
                 setPadding(dp(6), 0, dp(4), 0)
                 isClickable = true
@@ -1606,10 +1625,10 @@ class MainActivity : Activity() {
                     showTabsDialog()
                 }
             }
-            row.addView(label, LinearLayout.LayoutParams(0, dp(48), 1f))
+            row.addView(label, LinearLayout.LayoutParams(0, dp(60), 1f))
             row.addView(close, LinearLayout.LayoutParams(dp(44), dp(48)))
             panel.addView(row, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(66)
             ).apply { bottomMargin = dp(6) })
         }
 
