@@ -522,7 +522,6 @@ class MainActivity : Activity() {
         geckoView.visibility = View.VISIBLE
         geckoView.setSession(currentTab.session)
         currentTab.session.loadUri(destination)
-        recordHistory(destination)
     }
 
     private fun showHome() {
