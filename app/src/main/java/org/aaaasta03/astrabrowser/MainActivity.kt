@@ -87,10 +87,12 @@ class MainActivity : Activity() {
 
     private lateinit var browserPrefs: SharedPreferences
     private var selectedSearchEngine = UrlNormalizer.SearchEngine.DUCKDUCKGO
-    private val bookmarks = mutableListOf<String>()
+    private val bookmarks = mutableListOf<Bookmark>()
 
     private data class HistoryItem(val url: String, val visitedAt: Long)
     private val history = mutableListOf<HistoryItem>()
+
+    private data class Bookmark(var title: String, val url: String)
 
     private data class DownloadItem(val name: String, val bytes: Long, val completedAt: Long)
     private val downloads = mutableListOf<DownloadItem>()
@@ -755,9 +757,22 @@ class MainActivity : Activity() {
         try {
             val savedBookmarks = JSONArray(browserPrefs.getString("bookmarks", "[]"))
             for (i in 0 until savedBookmarks.length()) {
-                val url = savedBookmarks.optString(i)
-                if (url.startsWith("https://") || url.startsWith("http://")) {
-                    bookmarks.add(url)
+                when (val value = savedBookmarks.opt(i)) {
+                    is JSONObject -> {
+                        val url = value.optString("url")
+                        if (isWebUrl(url)) {
+                            val title = value.optString("title")
+                                .takeIf { it.isNotBlank() }
+                                ?: defaultBookmarkTitle(url)
+                            bookmarks.add(Bookmark(title, url))
+                        }
+                    }
+                    is String -> {
+                        // Migrate bookmarks saved by older Astra builds (URL-only strings).
+                        if (isWebUrl(value)) {
+                            bookmarks.add(Bookmark(defaultBookmarkTitle(value), value))
+                        }
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -798,7 +813,13 @@ class MainActivity : Activity() {
 
     private fun persistBookmarks() {
         val data = JSONArray()
-        bookmarks.forEach { data.put(it) }
+        bookmarks.forEach { bookmark ->
+            data.put(
+                JSONObject()
+                    .put("title", bookmark.title)
+                    .put("url", bookmark.url)
+            )
+        }
         browserPrefs.edit().putString("bookmarks", data.toString()).apply()
     }
 
@@ -1214,17 +1235,22 @@ class MainActivity : Activity() {
         searchField.requestFocus()
     }
 
+    private fun defaultBookmarkTitle(url: String): String =
+        Uri.parse(url).host?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: url
+
     private fun bookmarkCurrentPage() {
         val url = currentTab.url
-        if (url.isNullOrBlank()) {
+        if (!isWebUrl(url)) {
             Toast.makeText(this, "Open a webpage before bookmarking", Toast.LENGTH_SHORT).show()
             return
         }
-        if (bookmarks.contains(url)) {
+        if (bookmarks.any { it.url == url }) {
             Toast.makeText(this, "Already bookmarked", Toast.LENGTH_SHORT).show()
             return
         }
-        bookmarks.add(0, url)
+        val title = currentTab.title?.trim()?.takeIf { it.isNotEmpty() && it != url }
+            ?: defaultBookmarkTitle(url)
+        bookmarks.add(0, Bookmark(title, url))
         persistBookmarks()
         Toast.makeText(this, "Bookmark saved", Toast.LENGTH_SHORT).show()
     }
@@ -1248,31 +1274,34 @@ class MainActivity : Activity() {
                 setPadding(dp(12), dp(18), dp(12), dp(18))
             })
         } else {
-            bookmarks.toList().forEach { url ->
-                val row = TextView(this).apply {
-                    text = url
-                    textSize = 14f
-                    setTextColor(primaryText)
-                    setPadding(dp(12), dp(14), dp(12), dp(14))
+            bookmarks.toList().forEach { bookmark ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(12), dp(12), dp(12))
                     background = rounded(panelColor, 12)
                     isClickable = true
                     isFocusable = true
+                    addView(TextView(this@MainActivity).apply {
+                        text = bookmark.title
+                        textSize = 15f
+                        setTextColor(primaryText)
+                        setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+                        maxLines = 2
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = bookmark.url
+                        textSize = 12f
+                        setTextColor(secondaryText)
+                        maxLines = 2
+                        setPadding(0, dp(4), 0, 0)
+                    })
                     setOnClickListener {
                         dialog.dismiss()
-                        loadAddress(url)
+                        loadAddress(bookmark.url)
                     }
                     setOnLongClickListener {
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle("Remove bookmark?")
-                            .setMessage(url)
-                            .setNegativeButton("Cancel", null)
-                            .setPositiveButton("Remove") { _, _ ->
-                                bookmarks.remove(url)
-                                persistBookmarks()
-                                dialog.dismiss()
-                                showBookmarksDialog()
-                            }
-                            .show()
+                        dialog.dismiss()
+                        showBookmarkOptions(bookmark)
                         true
                     }
                 }
@@ -1296,6 +1325,56 @@ class MainActivity : Activity() {
             }
         }
         dialog.show()
+    }
+
+    private fun showBookmarkOptions(bookmark: Bookmark) {
+        AlertDialog.Builder(this)
+            .setTitle(bookmark.title)
+            .setItems(arrayOf("Rename bookmark", "Remove bookmark")) { _, which ->
+                when (which) {
+                    0 -> showRenameBookmarkDialog(bookmark)
+                    1 -> AlertDialog.Builder(this)
+                        .setTitle("Remove bookmark?")
+                        .setMessage(bookmark.title)
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Remove") { _, _ ->
+                            bookmarks.removeAll { it.url == bookmark.url }
+                            persistBookmarks()
+                            showBookmarksDialog()
+                        }
+                        .show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showRenameBookmarkDialog(bookmark: Bookmark) {
+        val titleInput = EditText(this).apply {
+            hint = "Bookmark title"
+            setSingleLine(true)
+            setText(bookmark.title)
+            setSelection(text.length)
+            setTextColor(primaryText)
+            setHintTextColor(secondaryText)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = rounded(fieldColor, 14)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rename bookmark")
+            .setView(titleInput)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                val newTitle = titleInput.text?.toString()?.trim().orEmpty()
+                if (newTitle.isBlank()) {
+                    Toast.makeText(this, "Bookmark title cannot be empty", Toast.LENGTH_SHORT).show()
+                } else {
+                    bookmark.title = newTitle
+                    persistBookmarks()
+                    showBookmarksDialog()
+                }
+            }
+            .show()
     }
 
     private fun showHistoryDialog() {
