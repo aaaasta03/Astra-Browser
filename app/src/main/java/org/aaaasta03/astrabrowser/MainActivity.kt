@@ -46,11 +46,14 @@ class MainActivity : Activity() {
     private lateinit var runtime: GeckoRuntime
     private lateinit var addressBar: EditText
     private lateinit var tabCountButton: TextView
+    private lateinit var reloadButton: TextView
 
     private data class BrowserTab(
         val session: GeckoSession,
         var url: String? = null,
-        var isHome: Boolean = true
+        var isHome: Boolean = true,
+        var isLoading: Boolean = false,
+        var loadProgress: Int = 0
     )
 
     private val tabs = mutableListOf<BrowserTab>()
@@ -360,9 +363,10 @@ class MainActivity : Activity() {
         bar.addView(iconButton("⌂", "Home") {
             showHome()
         }, equalButtonParams())
-        bar.addView(iconButton("↻", "Reload page") {
-            if (!currentTab.isHome) currentTab.session.reload() else homeSearch.requestFocus()
-        }, equalButtonParams())
+        reloadButton = iconButton("↻", "Reload page") {
+            handleReloadStopClick()
+        } as TextView
+        bar.addView(reloadButton, equalButtonParams())
         tabCountButton = iconButton("▢ ${tabs.size}", "Show open tabs") {
             showTabsDialog()
         } as TextView
@@ -527,6 +531,33 @@ class MainActivity : Activity() {
             setColor(color)
             cornerRadius = dp(radiusDp).toFloat()
         }
+
+    private fun handleReloadStopClick() {
+        if (currentTab.isLoading) {
+            currentTab.session.stop()
+            currentTab.isLoading = false
+            loadingProgressBar.visibility = View.GONE
+            updateReloadStopButton()
+            return
+        }
+
+        if (!currentTab.isHome) {
+            currentTab.session.reload()
+        } else {
+            homeSearch.requestFocus()
+        }
+    }
+
+    private fun updateReloadStopButton() {
+        if (!::reloadButton.isInitialized || tabs.isEmpty()) return
+        val loading = currentTab.isLoading
+        reloadButton.text = if (loading) "×" else "↻"
+        reloadButton.contentDescription = when {
+            loading -> "Stop loading"
+            currentTab.isHome -> "Focus search"
+            else -> "Reload page"
+        }
+    }
 
     private fun loadAddress(input: String) {
         val destination = UrlNormalizer.normalize(input)
@@ -1164,27 +1195,36 @@ class MainActivity : Activity() {
         }
         newSession.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
-                if (tabs.getOrNull(currentTabIndex)?.session !== session) return
-                loadingProgressBar.progress = 0
-                loadingProgressBar.visibility = View.VISIBLE
+                val tab = tabs.firstOrNull { it.session === session } ?: return
+                tab.isLoading = true
+                tab.loadProgress = 0
+                if (tabs.getOrNull(currentTabIndex)?.session === session) {
+                    loadingProgressBar.progress = 0
+                    loadingProgressBar.visibility = View.VISIBLE
+                    updateReloadStopButton()
+                }
             }
 
             override fun onProgressChange(session: GeckoSession, progress: Int) {
+                val tab = tabs.firstOrNull { it.session === session } ?: return
+                tab.loadProgress = progress.coerceIn(0, 100)
                 if (tabs.getOrNull(currentTabIndex)?.session !== session) return
-                loadingProgressBar.progress = progress.coerceIn(0, 100)
-                if (progress in 1..99) {
+                loadingProgressBar.progress = tab.loadProgress
+                if (tab.isLoading && progress in 0..99) {
                     loadingProgressBar.visibility = View.VISIBLE
-                } else if (progress >= 100) {
+                } else {
                     loadingProgressBar.visibility = View.GONE
                 }
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
+                val tab = tabs.firstOrNull { it.session === session } ?: return
+                tab.isLoading = false
                 if (tabs.getOrNull(currentTabIndex)?.session === session) {
                     loadingProgressBar.visibility = View.GONE
+                    updateReloadStopButton()
                 }
                 if (!success) return
-                val tab = tabs.firstOrNull { it.session === session } ?: return
                 val url = tab.url ?: return
                 if (url.startsWith("https://") || url.startsWith("http://")) {
                     recordHistory(url)
@@ -1204,7 +1244,10 @@ class MainActivity : Activity() {
         currentTabIndex = index
         val tab = currentTab
         geckoView.setSession(tab.session)
-        loadingProgressBar.visibility = View.GONE
+        loadingProgressBar.progress = tab.loadProgress
+        loadingProgressBar.visibility =
+            if (tab.isLoading && tab.loadProgress < 100) View.VISIBLE else View.GONE
+        updateReloadStopButton()
         showingHome = tab.isHome
         homeView.visibility = if (tab.isHome) View.VISIBLE else View.GONE
         geckoView.visibility = if (tab.isHome) View.GONE else View.VISIBLE
