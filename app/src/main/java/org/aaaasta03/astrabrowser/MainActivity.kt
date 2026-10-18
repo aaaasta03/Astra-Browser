@@ -31,8 +31,10 @@ import java.util.Date
 import java.io.File
 import java.net.URLDecoder
 import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.StorageController
 
 /**
  * First native Astra shell. GeckoView owns webpage rendering; the start page,
@@ -395,6 +397,9 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Settings & privacy", "Privacy status and roadmap") {
             showPrivacyInfo()
         })
+        menu.addView(menuItem("Clear browsing data", "Remove cookies, site data, cache and history") {
+            showClearBrowsingDataDialog()
+        })
         menu.addView(menuItem("Extensions", "WebExtensions support is in development") {
             showComingSoon("Extension manager")
         })
@@ -557,7 +562,8 @@ class MainActivity : Activity() {
                 "Current prototype:\n" +
                     "• Only the Internet permission is declared by Astra.\n" +
                     "• Cleartext HTTP is disabled at the Android app level.\n" +
-                    "• The address bar restricts direct navigation to HTTP(S) destinations.\n\n" +
+                    "• The address bar restricts direct navigation to HTTP(S) destinations.\n" +
+                    "• Clear browsing data removes saved history and GeckoView site data.\n\n" +
                     "Still in development:\n" +
                     "• Tracker blocking and anti-fingerprinting controls.\n" +
                     "• Private sessions and automatic data clearing.\n" +
@@ -565,6 +571,74 @@ class MainActivity : Activity() {
             )
             .setPositiveButton("OK", null)
             .show()
+    }
+
+    private fun showClearBrowsingDataDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Clear browsing data?")
+            .setMessage(
+                "Astra will close all open tabs and clear saved browsing history, cookies, " +
+                    "site storage, caches, and saved site permissions. Bookmarks and downloaded " +
+                    "files will be kept."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Clear data") { _, _ -> clearBrowsingData() }
+            .show()
+    }
+
+    private fun clearBrowsingData() {
+        // GeckoView warns that open sessions can recreate data after a clear, so close every
+        // session before invoking StorageController.clearData().
+        val sessionsToClose = tabs.toList()
+        geckoView.releaseSession()
+        sessionsToClose.forEach { it.session.close() }
+        tabs.clear()
+        currentTabIndex = 0
+
+        history.clear()
+        persistHistory()
+        showingHome = true
+        homeView.visibility = View.VISIBLE
+        geckoView.visibility = View.GONE
+        addressBar.setText("")
+        homeSearch.setText("")
+        updateTabCount()
+
+        try {
+            runtime.storageController.clearData(StorageController.ClearFlags.ALL).accept(
+                { _ ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        createTab(switchTo = true)
+                        Toast.makeText(
+                            this,
+                            "Browsing data cleared. Bookmarks and downloads were kept.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                },
+                { error ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        createTab(switchTo = true)
+                        Toast.makeText(
+                            this,
+                            "History cleared, but site data could not be fully cleared: " +
+                                (error.localizedMessage ?: "unknown error"),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            )
+        } catch (error: Exception) {
+            createTab(switchTo = true)
+            Toast.makeText(
+                this,
+                "History cleared, but site data could not be fully cleared: " +
+                    (error.localizedMessage ?: "unknown error"),
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun loadBrowserLibrary() {
