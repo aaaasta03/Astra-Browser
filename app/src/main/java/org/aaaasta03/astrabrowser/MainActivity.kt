@@ -86,6 +86,7 @@ class MainActivity : Activity() {
     private val accentColor = Color.rgb(143, 221, 199)
 
     private lateinit var browserPrefs: SharedPreferences
+    private var selectedSearchEngine = UrlNormalizer.SearchEngine.DUCKDUCKGO
     private val bookmarks = mutableListOf<String>()
 
     private data class HistoryItem(val url: String, val visitedAt: Long)
@@ -176,6 +177,10 @@ class MainActivity : Activity() {
         setContentView(root)
 
         browserPrefs = getSharedPreferences("astra_browser_library", MODE_PRIVATE)
+        selectedSearchEngine = UrlNormalizer.SearchEngine.fromId(
+            browserPrefs.getString("search_engine", null)
+        )
+        homeSearch.hint = "Search with ${selectedSearchEngine.label}"
         loadBrowserLibrary()
 
         runtime = GeckoRuntime.create(applicationContext)
@@ -270,7 +275,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         homeSearch = EditText(this).apply {
-            hint = "Search privately"
+            hint = "Search the web"
             setSingleLine(true)
             imeOptions = EditorInfo.IME_ACTION_SEARCH
             textSize = 16f
@@ -434,6 +439,9 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Bookmarks", "Saved pages") { showBookmarksDialog() })
         menu.addView(menuItem("History", "Recently visited pages") { showHistoryDialog() })
         menu.addView(menuItem("Downloads", "View and open downloaded files") { showDownloadsDialog() })
+        menu.addView(menuItem("Search engine", "Choose the default web search provider") {
+            showSearchEngineDialog()
+        })
 
         menu.addView(sectionLabel("PRIVACY & TOOLS"), menuLabelParams().apply {
             topMargin = dp(22)
@@ -592,7 +600,7 @@ class MainActivity : Activity() {
     }
 
     private fun loadAddress(input: String) {
-        val destination = UrlNormalizer.normalize(input)
+        val destination = UrlNormalizer.normalize(input, selectedSearchEngine)
         if (destination.isBlank()) {
             Toast.makeText(this, "Enter a web address or search term", Toast.LENGTH_SHORT).show()
             return
@@ -636,6 +644,23 @@ class MainActivity : Activity() {
 
     private fun showComingSoon(feature: String) {
         Toast.makeText(this, "$feature is planned for a future milestone", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showSearchEngineDialog() {
+        val engines = UrlNormalizer.SearchEngine.values()
+        val labels = engines.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Default search engine")
+            .setSingleChoiceItems(labels, engines.indexOf(selectedSearchEngine)) { dialog, which ->
+                val choice = engines.getOrNull(which) ?: return@setSingleChoiceItems
+                selectedSearchEngine = choice
+                browserPrefs.edit().putString("search_engine", choice.id).apply()
+                homeSearch.hint = "Search with ${choice.label}"
+                Toast.makeText(this, "Search engine set to ${choice.label}", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showPrivacyInfo() {

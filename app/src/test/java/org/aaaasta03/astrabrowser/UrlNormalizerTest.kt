@@ -50,6 +50,30 @@ class UrlNormalizerTest {
     }
 
     @Test
+    fun supportsAlternativeSearchEngines() {
+        assertEquals(
+            "https://www.google.com/search?q=hello%20browser",
+            UrlNormalizer.normalize("hello browser", UrlNormalizer.SearchEngine.GOOGLE)
+        )
+        assertEquals(
+            "https://www.bing.com/search?q=hello%20browser",
+            UrlNormalizer.normalize("hello browser", UrlNormalizer.SearchEngine.BING)
+        )
+        assertEquals(
+            "https://search.brave.com/search?q=hello%20browser",
+            UrlNormalizer.normalize("hello browser", UrlNormalizer.SearchEngine.BRAVE)
+        )
+    }
+
+    @Test
+    fun unknownSavedEngineFallsBackToDuckDuckGo() {
+        assertEquals(
+            UrlNormalizer.SearchEngine.DUCKDUCKGO,
+            UrlNormalizer.SearchEngine.fromId("not-a-search-engine")
+        )
+    }
+
+    @Test
     fun emptyInputStaysEmpty() {
         assertEquals("", UrlNormalizer.normalize("   "))
     }
