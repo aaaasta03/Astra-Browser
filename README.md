@@ -7,7 +7,7 @@ Astra Browser is an experimental Android browser built around Mozilla GeckoView,
 ## Goals
 
 - Android 8.0 (API 26) minimum; target Android 16 (API 36).
-- Compile against Android API 37 to satisfy the selected GeckoView dependency while keeping target SDK at 36.
+- Compile against API 36 using the SDK platform currently available on the CI runner.
 - Build the first APK for `arm64-v8a`.
 - Use a pinned GeckoView release rather than the legacy Opera Mini native library.
 - Keep app permissions minimal and avoid adding analytics or account services by default.
@@ -23,7 +23,7 @@ Astra Browser is an experimental Android browser built around Mozilla GeckoView,
 
 ## Build
 
-The GitHub Actions workflow installs JDK 17, Android SDK API 37/build tools, and Gradle 9.3.1, then runs:
+The GitHub Actions workflow installs JDK 17, Android SDK API 36/build tools, and Gradle 8.13, then runs:
 
 ```sh
 gradle --no-daemon clean testDebugUnitTest assembleDebug
@@ -31,7 +31,7 @@ gradle --no-daemon clean testDebugUnitTest assembleDebug
 
 The resulting APK is written to `app/build/outputs/apk/debug/app-debug.apk`. The app module restricts packaging to `arm64-v8a`.
 
-For local builds, install JDK 17, Android SDK Platform 37, Android Build Tools 36.0.0, and Gradle 9.3.1:
+For local builds, install JDK 17 and Android SDK API 36, then install/use Gradle 8.13:
 
 ```sh
 gradle --version
@@ -42,14 +42,14 @@ A Gradle Wrapper has not been added yet. CI installs a pinned Gradle distributio
 
 ## Engine and dependency
 
-- GeckoView: `org.mozilla.geckoview:geckoview:158.0.20261007201254`
+- GeckoView: `org.mozilla.geckoview:geckoview:153.0.20260810162159`
 - Mozilla Maven repository: `https://maven.mozilla.org/maven2/`
 - Java compatibility: 17
-- Android Gradle Plugin: 9.1.1
-- Gradle: 9.3.1
-- Kotlin: Android Gradle Plugin's built-in Kotlin support
+- Android Gradle Plugin: 8.13.2
+- Kotlin Gradle plugin: 2.2.20
+- Gradle: 8.13
 
-AGP 9 enables built-in Kotlin, so this project intentionally does not apply the separate `org.jetbrains.kotlin.android` plugin. Recheck Mozilla's stable GeckoView releases and security advisories before shipping updates.
+The GeckoView version is pinned to the last tested API-36-compatible dependency line while this CI environment does not expose Android API 37. Re-evaluate a newer GeckoView stable release when the SDK platform and required Android Gradle Plugin are available together; do not silently override AndroidX runtime dependencies.
 
 ## Security notes
 
