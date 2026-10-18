@@ -522,7 +522,6 @@ class MainActivity : Activity() {
         geckoView.visibility = View.VISIBLE
         geckoView.setSession(currentTab.session)
         currentTab.session.loadUri(destination)
-        recordHistory(destination)
     }
 
     private fun showHome() {
@@ -1115,6 +1114,37 @@ class MainActivity : Activity() {
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 handleExternalResponse(response)
+            }
+        }
+        newSession.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onLocationChange(
+                session: GeckoSession,
+                url: String?,
+                perms: List<GeckoSession.PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean
+            ) {
+                if (url.isNullOrBlank()) return
+                if (!url.startsWith("https://") && !url.startsWith("http://")) return
+
+                val tab = tabs.firstOrNull { it.session === session } ?: return
+                tab.url = url
+                tab.isHome = false
+                if (tabs.getOrNull(currentTabIndex) === tab) {
+                    if (addressBar.text?.toString() != url) addressBar.setText(url)
+                    showingHome = false
+                    homeView.visibility = View.GONE
+                    geckoView.visibility = View.VISIBLE
+                }
+            }
+        }
+        newSession.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onPageStop(session: GeckoSession, success: Boolean) {
+                if (!success) return
+                val tab = tabs.firstOrNull { it.session === session } ?: return
+                val url = tab.url ?: return
+                if (url.startsWith("https://") || url.startsWith("http://")) {
+                    recordHistory(url)
+                }
             }
         }
         tabs.add(BrowserTab(session = newSession))
