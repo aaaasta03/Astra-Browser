@@ -1364,6 +1364,18 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun closeAllTabs() {
+        geckoView.releaseSession()
+        tabs.toList().forEach { it.session.close() }
+        tabs.clear()
+        currentTabIndex = 0
+        loadingProgressBar.progress = 0
+        loadingProgressBar.visibility = View.GONE
+        persistOpenTabsIfReady()
+        createTab(switchTo = true)
+        Toast.makeText(this, "All tabs closed", Toast.LENGTH_SHORT).show()
+    }
+
     private fun showTabsDialog() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1372,6 +1384,7 @@ class MainActivity : Activity() {
         val dialog = AlertDialog.Builder(this)
             .setTitle("Open tabs · ${tabs.size}")
             .setView(panel)
+            .setNeutralButton("Close all", null)
             .setNegativeButton("Done", null)
             .setPositiveButton("New tab", null)
             .create()
@@ -1423,6 +1436,20 @@ class MainActivity : Activity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 dialog.dismiss()
                 createTab(switchTo = true)
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                AlertDialog.Builder(this)
+                    .setTitle("Close all tabs?")
+                    .setMessage(
+                        "This closes every open tab and opens a fresh start page. " +
+                            "Bookmarks, history, and downloaded files will be kept."
+                    )
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Close all") { _, _ ->
+                        dialog.dismiss()
+                        closeAllTabs()
+                    }
+                    .show()
             }
         }
         dialog.show()
