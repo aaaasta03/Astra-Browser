@@ -1239,8 +1239,8 @@ class MainActivity : Activity() {
         Uri.parse(url).host?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: url
 
     private fun bookmarkCurrentPage() {
-        val url = currentTab.url
-        if (!isWebUrl(url)) {
+        val url = currentTab.url?.takeIf { isWebUrl(it) }
+        if (url == null) {
             Toast.makeText(this, "Open a webpage before bookmarking", Toast.LENGTH_SHORT).show()
             return
         }
