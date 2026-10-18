@@ -413,6 +413,9 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Bookmark this page", "Save the current address") {
             bookmarkCurrentPage()
         })
+        menu.addView(menuItem("Share current page", "Send this page to another app") {
+            shareCurrentPage()
+        })
         menu.addView(menuItem("Bookmarks", "Saved pages") { showBookmarksDialog() })
         menu.addView(menuItem("History", "Recently visited pages") { showHistoryDialog() })
         menu.addView(menuItem("Downloads", "View and open downloaded files") { showDownloadsDialog() })
@@ -1011,6 +1014,21 @@ class MainActivity : Activity() {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
         else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+    }
+
+    private fun shareCurrentPage() {
+        val url = currentTab.url
+        if (!isWebUrl(url)) {
+            Toast.makeText(this, "Open a webpage before sharing", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, url)
+            putExtra(Intent.EXTRA_SUBJECT, url)
+        }
+        startActivity(Intent.createChooser(shareIntent, "Share page"))
     }
 
     private fun bookmarkCurrentPage() {
