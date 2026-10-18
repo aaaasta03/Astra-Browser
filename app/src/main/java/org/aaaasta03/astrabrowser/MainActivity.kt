@@ -1087,10 +1087,13 @@ class MainActivity : Activity() {
                     { result ->
                         runOnUiThread {
                             if (dialog.isShowing) {
+                                val finderResult = result
                                 resultLabel.text = when {
-                                    !result.found -> "No matches found"
-                                    result.total > 0 -> "Match \${result.current} of \${result.total}"
-                                    result.current > 0 -> "Match \${result.current}"
+                                    finderResult == null -> "Searching…"
+                                    !finderResult.found -> "No matches found"
+                                    finderResult.total > 0 ->
+                                        "Match ${finderResult.current} of ${finderResult.total}"
+                                    finderResult.current > 0 -> "Match ${finderResult.current}"
                                     else -> "Searching…"
                                 }
                             }
@@ -1100,7 +1103,7 @@ class MainActivity : Activity() {
                         runOnUiThread {
                             if (dialog.isShowing) {
                                 resultLabel.text =
-                                    "Search failed: \${error?.localizedMessage ?: "unknown error"}"
+                                    "Search failed: " + (error?.localizedMessage ?: "unknown error")
                             }
                         }
                     }
