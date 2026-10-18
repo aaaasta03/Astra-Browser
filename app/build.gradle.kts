@@ -1,10 +1,11 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "org.aaaasta03.astrabrowser"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.aaaasta03.astrabrowser"
@@ -33,13 +34,17 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
     testOptions {
         unitTests.isReturnDefaultValues = false
     }
 }
 
 dependencies {
-    implementation("org.mozilla.geckoview:geckoview:158.0.20261007201254")
+    implementation("org.mozilla.geckoview:geckoview:153.0.20260810162159")
 
     testImplementation("junit:junit:4.13.2")
 }
