@@ -18,21 +18,20 @@ The CI run is the source of truth for whether this commit builds. Source files b
 
 GeckoView embeds Mozilla's Gecko engine into an Android application. It is preferable to attempting to convert Opera Mini's bundled 32-bit native library into ARM64: native machine code has to be built for the target ABI, not relabeled.
 
-The current dependency is pinned to `org.mozilla.geckoview:geckoview:158.0.20261007201254`, available through Mozilla's Maven repository at the time this starter was prepared. Review current stable releases and security fixes before updates or public releases.
+The current pinned dependency is `org.mozilla.geckoview:geckoview:153.0.20260810162159`. It is chosen to avoid the dependency on AndroidX Core 1.19.0 that caused the CI AAR metadata check to require Android API 37 and AGP 9.1.0. This is a build-compatibility decision, not a claim that this is the newest GeckoView release. Review Mozilla's current stable releases and security fixes before any public release.
 
 ### Android targets
 
 - `minSdk = 26` — Android 8.0 or later.
-- `compileSdk = 37` — Android API 37, required by the selected AndroidX Core dependency.
-- `targetSdk = 36` — Android 16 target; this remains deliberately separate from compile SDK.
+- `compileSdk = 36` and `targetSdk = 36` — Android 16 target.
 - The app's ABI filter is `arm64-v8a`.
-- Java source/target compatibility uses Java 17. AGP 9.1 provides built-in Kotlin support, so the separate Kotlin Android plugin is not applied.
+- Java source/target and Kotlin bytecode target use Java 17.
 
 A target SDK is not a maximum supported OS version. Avoid `maxSdkVersion` unless there is a well-justified compatibility reason.
 
 ### Build system
 
-The repository uses Android Gradle Plugin 9.1.1 with Gradle 9.3.1 and Java 17. AGP 9's built-in Kotlin support replaces the separate `org.jetbrains.kotlin.android` plugin; the build files intentionally avoid applying both. The CI job installs the Android 37 platform and runs JVM tests before assembling the APK. A Gradle Wrapper should be generated and committed once a build environment is available.
+The repository uses Android Gradle Plugin 8.13.2, Kotlin Gradle Plugin 2.2.20, and Gradle 8.13 with Java 17. The CI job installs Android SDK Platform 36 and Build Tools 36.0.0, then runs JVM tests before assembling the APK. A Gradle Wrapper should be generated and committed once a build environment is available.
 
 ## Privacy and security backlog
 
