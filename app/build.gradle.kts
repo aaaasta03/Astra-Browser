@@ -44,6 +44,7 @@ android {
 }
 
 dependencies {
+    implementation("androidx.core:core-ktx:1.16.0")
     implementation("org.mozilla.geckoview:geckoview:153.0.20260810162159")
 
     testImplementation("junit:junit:4.13.2")
