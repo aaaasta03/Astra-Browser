@@ -58,7 +58,8 @@ class MainActivity : Activity() {
         var isLoading: Boolean = false,
         var loadProgress: Int = 0,
         var isDesktopMode: Boolean = false,
-        var title: String? = null
+        var title: String? = null,
+        var shouldActivateOnNavigation: Boolean = false
     )
 
     private val tabs = mutableListOf<BrowserTab>()
@@ -1443,6 +1444,16 @@ class MainActivity : Activity() {
 
         val newSession = GeckoSession()
         newSession.open(runtime)
+        configureSession(newSession)
+        tabs.add(BrowserTab(session = newSession))
+        if (switchTo) {
+            switchToTab(tabs.lastIndex)
+        } else {
+            updateTabCount()
+        }
+    }
+
+    private fun configureSession(newSession: GeckoSession) {
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 handleExternalResponse(response)
@@ -1468,7 +1479,11 @@ class MainActivity : Activity() {
                 val urlChanged = tab.url != url
                 tab.url = url
                 tab.isHome = false
-                if (tabs.getOrNull(currentTabIndex) === tab) {
+                val tabIndex = tabs.indexOfFirst { it.session === session }
+                if (tab.shouldActivateOnNavigation && tabIndex >= 0) {
+                    tab.shouldActivateOnNavigation = false
+                    switchToTab(tabIndex)
+                } else if (tabs.getOrNull(currentTabIndex) === tab) {
                     if (addressBar.text?.toString() != url) addressBar.setText(url)
                     showingHome = false
                     homeView.visibility = View.GONE
@@ -1481,6 +1496,37 @@ class MainActivity : Activity() {
                     recordHistory(url)
                     persistOpenTabsIfReady()
                 }
+            }
+
+            override fun onNewSession(
+                session: GeckoSession,
+                uri: String
+            ): GeckoResult<GeckoSession>? {
+                if (tabs.size >= maxOpenTabs) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Astra supports up to $maxOpenTabs open tabs",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return null
+                }
+
+                // GeckoView opens and loads this newly-created session after this result
+                // is returned. Do not call open() or loadUri() here.
+                val popupSession = GeckoSession()
+                configureSession(popupSession)
+                val initialUrl = uri.takeIf { isWebUrl(it) }
+                tabs.add(
+                    BrowserTab(
+                        session = popupSession,
+                        url = initialUrl,
+                        isHome = initialUrl == null,
+                        shouldActivateOnNavigation = true
+                    )
+                )
+                updateTabCount()
+                persistOpenTabsIfReady()
+                return GeckoResult.fromValue(popupSession)
             }
         }
         newSession.progressDelegate = object : GeckoSession.ProgressDelegate {
@@ -1520,12 +1566,6 @@ class MainActivity : Activity() {
                     recordHistory(url)
                 }
             }
-        }
-        tabs.add(BrowserTab(session = newSession))
-        if (switchTo) {
-            switchToTab(tabs.lastIndex)
-        } else {
-            updateTabCount()
         }
     }
 
