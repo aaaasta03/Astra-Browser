@@ -1359,55 +1359,150 @@ class MainActivity : Activity() {
 
     private fun showReaderMode() {
         val tab = currentTab
-        val sourceUrl = tab.url
+        val sourceUrl = tab.url.orEmpty()
         if (tab.isHome || !isWebUrl(sourceUrl)) {
             Toast.makeText(this, "Open a webpage before using Reader mode", Toast.LENGTH_SHORT).show()
             return
         }
 
+        var cancelled = false
         val loading = AlertDialog.Builder(this)
             .setTitle("Reader mode")
-            .setMessage("Extracting readable page content…")
+            .setMessage("Checking for an article…")
             .setNegativeButton("Cancel", null)
             .create()
+        loading.setOnShowListener {
+            loading.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+                cancelled = true
+                loading.dismiss()
+            }
+        }
         loading.show()
 
+        val extractor = tab.session.sessionPageExtractor
+
+        fun finishLoading() {
+            if (loading.isShowing) loading.dismiss()
+        }
+
         try {
-            tab.session.sessionPageExtractor
-                .getPageContent(PageExtractionController.ContentParams(true))
-                .accept(
-                    { extracted ->
-                        runOnUiThread {
-                            if (isFinishing || isDestroyed) return@runOnUiThread
-                            loading.dismiss()
-                            val text = extracted.toString().trim()
-                            if (text.isBlank()) {
-                                Toast.makeText(this, "No readable text was found on this page", Toast.LENGTH_LONG).show()
-                                return@runOnUiThread
-                            }
-                            showReaderContent(tab.title?.takeIf { it.isNotBlank() } ?: sourceUrl, sourceUrl, text)
+            extractor.getPageMetadata().accept(
+                { metadata ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || cancelled) {
+                            finishLoading()
+                            return@runOnUiThread
                         }
-                    },
-                    { error ->
-                        runOnUiThread {
-                            if (isFinishing || isDestroyed) return@runOnUiThread
-                            loading.dismiss()
+
+                        if (metadata?.isReaderable != true) {
+                            finishLoading()
                             Toast.makeText(
                                 this,
-                                "Reader mode couldn't extract this page: ${error.localizedMessage ?: "unsupported page"}",
+                                "No main article was detected. Open a specific article and try Reader mode again.",
                                 Toast.LENGTH_LONG
                             ).show()
+                            return@runOnUiThread
+                        }
+
+                        loading.setMessage("Extracting article text…")
+                        try {
+                            extractor.getPageContent(
+                                PageExtractionController.ContentParams(true)
+                            ).accept(
+                                { extracted ->
+                                    runOnUiThread {
+                                        if (isFinishing || isDestroyed || cancelled) {
+                                            finishLoading()
+                                            return@runOnUiThread
+                                        }
+                                        finishLoading()
+                                        val text = cleanReaderText(extracted.orEmpty()).trim()
+                                        if (text.isBlank()) {
+                                            Toast.makeText(
+                                                this,
+                                                "No readable text was found on this page",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            return@runOnUiThread
+                                        }
+                                        showReaderContent(
+                                            tab.title?.takeIf { it.isNotBlank() } ?: sourceUrl,
+                                            sourceUrl,
+                                            text
+                                        )
+                                    }
+                                },
+                                { error ->
+                                    runOnUiThread {
+                                        if (isFinishing || isDestroyed || cancelled) {
+                                            finishLoading()
+                                            return@runOnUiThread
+                                        }
+                                        finishLoading()
+                                        Toast.makeText(
+                                            this,
+                                            "Reader mode couldn't extract this page: " +
+                                                (error?.localizedMessage ?: "unsupported page"),
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            )
+                        } catch (error: Exception) {
+                            finishLoading()
+                            if (!cancelled) {
+                                Toast.makeText(
+                                    this,
+                                    "Reader mode unavailable: " +
+                                        (error.localizedMessage ?: "unsupported page"),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
                         }
                     }
-                )
+                },
+                { error ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || cancelled) {
+                            finishLoading()
+                            return@runOnUiThread
+                        }
+                        finishLoading()
+                        Toast.makeText(
+                            this,
+                            "Reader mode couldn't identify the article: " +
+                                (error?.localizedMessage ?: "unknown error"),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            )
         } catch (error: Exception) {
-            loading.dismiss()
-            Toast.makeText(
-                this,
-                "Reader mode unavailable: ${error.localizedMessage ?: "unsupported page"}",
-                Toast.LENGTH_LONG
-            ).show()
+            finishLoading()
+            if (!cancelled) {
+                Toast.makeText(
+                    this,
+                    "Reader mode unavailable: " +
+                        (error.localizedMessage ?: "unsupported page"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
+    }
+
+    private fun cleanReaderText(content: String): String {
+        var text = content
+        text = text.replace(Regex("""!\[([^\]]*)]\([^)]+\)"""), "$1")
+        text = text.replace(
+            Regex("""\[([^\]]+)]\((?:https?://|mailto:)[^)]+\)"""),
+            "$1"
+        )
+        text = text.replace(Regex("""(?m)^\s{0,3}#{1,6}\s+"""), "")
+        text = text.replace(Regex("""(?m)^\s*>\s?"""), "")
+        text = text.replace(Regex("""\*\*(.*?)\*\*"""), "$1")
+        text = text.replace(Regex("""(?<!\*)\*(?!\*)(.*?)\*(?!\*)"""), "$1")
+        text = text.replace(Regex("""(?m)^\s*[-*_]{3,}\s*$"""), "")
+        return text.trim().replace(Regex("""\n{3,}"""), "\n\n")
     }
 
     private fun showReaderContent(title: String, sourceUrl: String, articleText: String) {
@@ -1421,9 +1516,9 @@ class MainActivity : Activity() {
         }
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.rgb(250, 248, 242))
-            addView(body, ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT
+            addView(body, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
             ))
         }
         AlertDialog.Builder(this)
