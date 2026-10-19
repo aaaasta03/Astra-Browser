@@ -111,7 +111,7 @@ class MainActivity : Activity() {
     private data class ClosedTab(val url: String, val title: String?, val isDesktopMode: Boolean)
     private val recentlyClosedTabs = mutableListOf<ClosedTab>()
 
-    private data class Bookmark(var title: String, val url: String)
+    private data class Bookmark(var title: String, val url: String, var folder: String = "Unsorted")
 
     private data class DownloadItem(val name: String, val bytes: Long, val completedAt: Long)
     private val downloads = mutableListOf<DownloadItem>()
@@ -478,6 +478,7 @@ class MainActivity : Activity() {
             toggleDesktopSite()
         })
         menu.addView(menuItem("Bookmarks", "Saved pages") { showBookmarksDialog() })
+        menu.addView(menuItem("Bookmark folders", "Browse and organize saved pages") { showBookmarkFoldersDialog() })
         menu.addView(menuItem("Import bookmarks", "Merge bookmarks from an Astra JSON backup") {
             importBookmarks()
         })
@@ -869,13 +870,13 @@ class MainActivity : Activity() {
                             val title = value.optString("title")
                                 .takeIf { it.isNotBlank() }
                                 ?: defaultBookmarkTitle(url)
-                            bookmarks.add(Bookmark(title, url))
+                            bookmarks.add(Bookmark(title, url, value.optString("folder", "Unsorted").trim().take(80).ifBlank { "Unsorted" }))
                         }
                     }
                     is String -> {
                         // Migrate bookmarks saved by older Astra builds (URL-only strings).
                         if (isWebUrl(value)) {
-                            bookmarks.add(Bookmark(defaultBookmarkTitle(value), value))
+                            bookmarks.add(Bookmark(defaultBookmarkTitle(value), value, "Unsorted"))
                         }
                     }
                 }
@@ -939,6 +940,7 @@ class MainActivity : Activity() {
                 JSONObject()
                     .put("title", bookmark.title)
                     .put("url", bookmark.url)
+                    .put("folder", bookmark.folder)
             )
         }
         browserPrefs.edit().putString("bookmarks", data.toString()).apply()
@@ -1452,12 +1454,12 @@ class MainActivity : Activity() {
         }
         val title = currentTab.title?.trim()?.takeIf { it.isNotEmpty() && it != url }
             ?: defaultBookmarkTitle(url)
-        bookmarks.add(0, Bookmark(title, url))
+        bookmarks.add(0, Bookmark(title, url, "Unsorted"))
         persistBookmarks()
         Toast.makeText(this, "Bookmark saved", Toast.LENGTH_SHORT).show()
     }
 
-    private fun showBookmarksDialog() {
+    private fun showBookmarksDialog(folderFilter: String? = null) {
         lateinit var dialog: AlertDialog
 
         val contentPanel = LinearLayout(this).apply {
@@ -1493,9 +1495,10 @@ class MainActivity : Activity() {
             listPanel.removeAllViews()
             val trimmedQuery = query.trim()
             val entries = bookmarks.toList().filter { bookmark ->
-                trimmedQuery.isEmpty() ||
+                (folderFilter == null || bookmark.folder == folderFilter) &&
+                (trimmedQuery.isEmpty() ||
                     bookmark.title.contains(trimmedQuery, ignoreCase = true) ||
-                    bookmark.url.contains(trimmedQuery, ignoreCase = true)
+                    bookmark.url.contains(trimmedQuery, ignoreCase = true))
             }
 
             if (entries.isEmpty()) {
@@ -1529,6 +1532,12 @@ class MainActivity : Activity() {
                         maxLines = 2
                     })
                     addView(TextView(this@MainActivity).apply {
+                        text = "📁 ${bookmark.folder}"
+                        textSize = 11f
+                        setTextColor(accentColor)
+                        setPadding(0, dp(4), 0, 0)
+                    })
+                    addView(TextView(this@MainActivity).apply {
                         text = bookmark.url
                         textSize = 12f
                         setTextColor(secondaryText)
@@ -1552,7 +1561,7 @@ class MainActivity : Activity() {
         }
 
         dialog = AlertDialog.Builder(this)
-            .setTitle("Bookmarks · ${bookmarks.size}")
+            .setTitle(if (folderFilter == null) "Bookmarks · ${bookmarks.size}" else "$folderFilter · ${bookmarks.count { it.folder == folderFilter }}")
             .setView(contentPanel)
             .setNegativeButton("Close", null)
             .setPositiveButton("Bookmark current page", null)
@@ -1576,13 +1585,96 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    private fun getBookmarkFolders(): List<String> {
+        val stored = try {
+            val array = JSONArray(browserPrefs.getString("bookmark_folders", "[]"))
+            (0 until array.length()).mapNotNull { array.optString(it).trim().takeIf { name -> name.isNotBlank() } }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return (stored + bookmarks.map { it.folder }).distinct().filterNot { it.equals("All bookmarks", true) }.sorted()
+    }
+
+    private fun showBookmarkFoldersDialog() {
+        val folders = (listOf("All bookmarks") + getBookmarkFolders())
+        AlertDialog.Builder(this)
+            .setTitle("Bookmark folders")
+            .setItems(folders.toTypedArray()) { _, which ->
+                if (which == 0) showBookmarksDialog()
+                else showBookmarksDialog(folders[which])
+            }
+            .setPositiveButton("Create folder") { _, _ -> promptCreateBookmarkFolder() }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun promptCreateBookmarkFolder(bookmark: Bookmark? = null) {
+        val input = EditText(this).apply {
+            hint = "Folder name"
+            setSingleLine(true)
+            setTextColor(primaryText)
+            setHintTextColor(secondaryText)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = rounded(fieldColor, 14)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (bookmark == null) "Create bookmark folder" else "Move bookmark to folder")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(if (bookmark == null) "Create" else "Move") { _, _ ->
+                val name = input.text?.toString()?.trim()?.take(80).orEmpty()
+                if (name.isBlank()) {
+                    Toast.makeText(this, "Folder name cannot be empty", Toast.LENGTH_SHORT).show()
+                } else if (name.equals("All bookmarks", ignoreCase = true)) {
+                    Toast.makeText(this, "Choose another folder name", Toast.LENGTH_SHORT).show()
+                } else {
+                    if (bookmark != null) {
+                        if (name !in getBookmarkFolders()) {
+                            browserPrefs.edit().putString(
+                                "bookmark_folders",
+                                JSONArray(getBookmarkFolders() + name).toString()
+                            ).apply()
+                        }
+                        bookmark.folder = name
+                        persistBookmarks()
+                        showBookmarksDialog(name)
+                    } else {
+                        browserPrefs.edit().putString(
+                            "bookmark_folders",
+                            JSONArray((getBookmarkFolders() + name).distinct()).toString()
+                        ).apply()
+                        Toast.makeText(this, "Folder created", Toast.LENGTH_SHORT).show()
+                        showBookmarkFoldersDialog()
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun showMoveBookmarkDialog(bookmark: Bookmark) {
+        val folders = (getBookmarkFolders() + "Create new folder…").distinct()
+        AlertDialog.Builder(this)
+            .setTitle("Move to folder")
+            .setItems(folders.toTypedArray()) { _, which ->
+                if (folders[which] == "Create new folder…") promptCreateBookmarkFolder(bookmark)
+                else {
+                    bookmark.folder = folders[which]
+                    persistBookmarks()
+                    showBookmarksDialog(bookmark.folder)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun showBookmarkOptions(bookmark: Bookmark) {
         AlertDialog.Builder(this)
             .setTitle(bookmark.title)
-            .setItems(arrayOf("Rename bookmark", "Remove bookmark")) { _, which ->
+            .setItems(arrayOf("Move to folder", "Rename bookmark", "Remove bookmark")) { _, which ->
                 when (which) {
-                    0 -> showRenameBookmarkDialog(bookmark)
-                    1 -> AlertDialog.Builder(this)
+                    0 -> showMoveBookmarkDialog(bookmark)
+                    1 -> showRenameBookmarkDialog(bookmark)
+                    2 -> AlertDialog.Builder(this)
                         .setTitle("Remove bookmark?")
                         .setMessage(bookmark.title)
                         .setNegativeButton("Cancel", null)
@@ -2011,7 +2103,7 @@ class MainActivity : Activity() {
             .put("version", 1)
             .put("bookmarks", JSONArray().apply {
                 bookmarks.forEach { bookmark ->
-                    put(JSONObject().put("title", bookmark.title).put("url", bookmark.url))
+                    put(JSONObject().put("title", bookmark.title).put("url", bookmark.url).put("folder", bookmark.folder))
                 }
             })
         try {
@@ -2049,7 +2141,8 @@ class MainActivity : Activity() {
                     continue
                 }
                 val title = entry.optString("title").trim().take(500).ifBlank { defaultBookmarkTitle(url) }
-                imported.add(Bookmark(title, url))
+                val folder = entry.optString("folder", "Unsorted").trim().take(80).ifBlank { "Unsorted" }
+                imported.add(Bookmark(title, url, folder))
                 added++
             }
             bookmarks.addAll(0, imported)
