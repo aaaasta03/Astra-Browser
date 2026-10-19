@@ -782,8 +782,6 @@ class MainActivity : Activity() {
         GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> "Protected media"
         GeckoSession.PermissionDelegate.PERMISSION_TRACKING -> "Tracking protection exception"
         GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS -> "Third-party storage access"
-        GeckoSession.PermissionDelegate.PERMISSION_LOCAL_DEVICE_ACCESS -> "Local device access"
-        GeckoSession.PermissionDelegate.PERMISSION_LOCAL_NETWORK_ACCESS -> "Local network access"
         else -> "Website permission ($permission)"
     }
 
