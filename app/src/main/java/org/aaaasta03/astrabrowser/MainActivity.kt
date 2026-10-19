@@ -817,7 +817,7 @@ class MainActivity : Activity() {
         rows.addView(permissionRows)
 
         val footer = TextView(this).apply {
-            text = "Camera and microphone requests are handled separately. Persistent-storage grants cannot be revoked through GeckoView."
+            text = "Camera and microphone choices are saved per site and can be reset to Ask. Private sessions do not save media choices. Persistent-storage grants cannot be revoked through GeckoView."
             textSize = 12f
             setTextColor(secondaryText)
             setPadding(dp(8), dp(12), dp(8), dp(8))
@@ -865,10 +865,12 @@ class MainActivity : Activity() {
                                     }.thenBy { permissionLabel(it.permission) }
                                 )
 
-                            status.text = if (entries.isEmpty()) {
+                            val mediaEntries = savedMediaPermissionDecisions()
+                            val totalEntries = entries.size + mediaEntries.size
+                            status.text = if (totalEntries == 0) {
                                 "No saved site permissions yet. When a site permission is allowed or blocked, it will appear here."
                             } else {
-                                "${entries.size} saved permission decision(s)"
+                                "${totalEntries} saved permission decision(s)"
                             }
 
                             entries.forEach { permission ->
@@ -956,6 +958,50 @@ class MainActivity : Activity() {
                                     LinearLayout.LayoutParams.WRAP_CONTENT
                                 ).apply { bottomMargin = dp(8) })
                             }
+
+                            mediaEntries.forEach { saved ->
+                                val site = permissionOrigin(saved.origin)
+                                val card = LinearLayout(this).apply {
+                                    orientation = LinearLayout.HORIZONTAL
+                                    gravity = Gravity.CENTER_VERTICAL
+                                    setPadding(dp(12), dp(10), dp(8), dp(10))
+                                    background = rounded(panelColor, 12)
+                                }
+                                val details = LinearLayout(this).apply {
+                                    orientation = LinearLayout.VERTICAL
+                                    setPadding(0, 0, dp(8), 0)
+                                }
+                                details.addView(TextView(this).apply {
+                                    text = site
+                                    textSize = 14f
+                                    maxLines = 2
+                                    setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+                                    setTextColor(primaryText)
+                                })
+                                details.addView(TextView(this).apply {
+                                    text = "${saved.type.replaceFirstChar { it.uppercase() }} · ${if (saved.decision == "allow") "Allowed" else "Blocked"}"
+                                    textSize = 12f
+                                    setTextColor(secondaryText)
+                                    setPadding(0, dp(4), 0, 0)
+                                })
+                                card.addView(details, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                                card.addView(smallButton("Reset", accentColor, Color.rgb(15, 18, 20)) {
+                                    AlertDialog.Builder(this)
+                                        .setTitle("Reset site permission?")
+                                        .setMessage("Reset ${saved.type} for $site to Ask? The site will need to request access again.")
+                                        .setNegativeButton("Cancel", null)
+                                        .setPositiveButton("Reset to Ask") { _, _ ->
+                                            browserPrefs.edit().remove(saved.key).apply()
+                                            Toast.makeText(this, "Permission reset to Ask", Toast.LENGTH_SHORT).show()
+                                            loadPermissions()
+                                        }
+                                        .show()
+                                }, LinearLayout.LayoutParams(dp(88), dp(44)))
+                                permissionRows.addView(card, LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT
+                                ).apply { bottomMargin = dp(8) })
+                            }
                         }
                     },
                     { error ->
@@ -1034,6 +1080,7 @@ class MainActivity : Activity() {
 
         history.clear()
         persistHistory()
+        clearSavedMediaPermissions()
         showingHome = true
         homeView.visibility = View.VISIBLE
         geckoView.visibility = View.GONE
