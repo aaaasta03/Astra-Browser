@@ -91,7 +91,7 @@ class MainActivity : Activity() {
     private var selectedSearchEngine = UrlNormalizer.SearchEngine.DUCKDUCKGO
     private val bookmarks = mutableListOf<Bookmark>()
 
-    private data class HistoryItem(val url: String, val visitedAt: Long)
+    private data class HistoryItem(val url: String, val visitedAt: Long, var title: String? = null)
     private val history = mutableListOf<HistoryItem>()
 
     private data class Bookmark(var title: String, val url: String)
@@ -788,8 +788,9 @@ class MainActivity : Activity() {
                 val item = savedHistory.optJSONObject(i) ?: continue
                 val url = item.optString("url")
                 val time = item.optLong("visitedAt", 0L)
+                val title = item.optString("title").takeIf { it.isNotBlank() }
                 if ((url.startsWith("https://") || url.startsWith("http://")) && time > 0L) {
-                    history.add(HistoryItem(url, time))
+                    history.add(HistoryItem(url, time, title))
                 }
             }
         } catch (_: Exception) {
@@ -828,16 +829,27 @@ class MainActivity : Activity() {
     private fun persistHistory() {
         val data = JSONArray()
         history.forEach { item ->
-            data.put(JSONObject().put("url", item.url).put("visitedAt", item.visitedAt))
+            data.put(JSONObject().put("url", item.url).put("visitedAt", item.visitedAt).put("title", item.title ?: ""))
         }
         browserPrefs.edit().putString("history", data.toString()).apply()
     }
 
     private fun recordHistory(url: String) {
+        val existingTitle = history.firstOrNull { it.url == url }?.title
+        val tabTitle = tabs.firstOrNull { it.url == url }?.title
         history.removeAll { it.url == url }
-        history.add(0, HistoryItem(url, System.currentTimeMillis()))
+        history.add(0, HistoryItem(url, System.currentTimeMillis(), tabTitle ?: existingTitle))
         while (history.size > 200) history.removeAt(history.lastIndex)
         persistHistory()
+    }
+
+    private fun updateHistoryTitle(url: String, title: String?) {
+        val cleanTitle = title?.trim()?.takeIf { it.isNotEmpty() && it != url } ?: return
+        val item = history.firstOrNull { it.url == url } ?: return
+        if (item.title != cleanTitle) {
+            item.title = cleanTitle
+            persistHistory()
+        }
     }
 
     private fun persistDownloads() {
@@ -1463,7 +1475,8 @@ class MainActivity : Activity() {
             panel.removeAllViews()
             val trimmedQuery = query.trim()
             val entries = history.toList().filter { item ->
-                trimmedQuery.isEmpty() || item.url.contains(trimmedQuery, ignoreCase = true)
+                trimmedQuery.isEmpty() || item.url.contains(trimmedQuery, ignoreCase = true) ||
+                    item.title.orEmpty().contains(trimmedQuery, ignoreCase = true)
             }
 
             if (entries.isEmpty()) {
@@ -1506,11 +1519,20 @@ class MainActivity : Activity() {
                         true
                     }
                 }
+                item.title?.takeIf { it.isNotBlank() && it != item.url }?.let { pageTitle ->
+                    row.addView(TextView(this).apply {
+                        text = pageTitle
+                        textSize = 14f
+                        maxLines = 2
+                        setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+                        setTextColor(primaryText)
+                    })
+                }
                 row.addView(TextView(this).apply {
                     text = item.url
-                    textSize = 13f
+                    textSize = 12f
                     maxLines = 2
-                    setTextColor(primaryText)
+                    setTextColor(secondaryText)
                 })
                 row.addView(TextView(this).apply {
                     text = timeFormat.format(Date(item.visitedAt))
@@ -1672,6 +1694,7 @@ class MainActivity : Activity() {
             override fun onTitleChange(session: GeckoSession, title: String?) {
                 val tab = tabs.firstOrNull { it.session === session } ?: return
                 tab.title = title?.trim()?.takeIf { it.isNotEmpty() }
+                tab.url?.let { updateHistoryTitle(it, tab.title) }
                 persistOpenTabsIfReady()
             }
         }
