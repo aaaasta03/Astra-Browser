@@ -94,6 +94,9 @@ class MainActivity : Activity() {
     private data class HistoryItem(val url: String, val visitedAt: Long, var title: String? = null)
     private val history = mutableListOf<HistoryItem>()
 
+    private data class ClosedTab(val url: String, val title: String?, val isDesktopMode: Boolean)
+    private val recentlyClosedTabs = mutableListOf<ClosedTab>()
+
     private data class Bookmark(var title: String, val url: String)
 
     private data class DownloadItem(val name: String, val bytes: Long, val completedAt: Long)
@@ -424,6 +427,9 @@ class MainActivity : Activity() {
         })
         menu.addView(menuItem("Switch tabs", "View and close open tabs") {
             showTabsDialog()
+        })
+        menu.addView(menuItem("Reopen closed tab", "Restore the most recently closed webpage") {
+            reopenLastClosedTab()
         })
         menu.addView(menuItem("Bookmark this page", "Save the current address") {
             bookmarkCurrentPage()
@@ -797,6 +803,21 @@ class MainActivity : Activity() {
             history.clear()
         }
 
+        recentlyClosedTabs.clear()
+        try {
+            val savedClosedTabs = JSONArray(browserPrefs.getString("recently_closed_tabs", "[]"))
+            for (i in 0 until minOf(savedClosedTabs.length(), 10)) {
+                val item = savedClosedTabs.optJSONObject(i) ?: continue
+                val url = item.optString("url")
+                if (isWebUrl(url)) {
+                    val title = item.optString("title").takeIf { it.isNotBlank() }
+                    recentlyClosedTabs.add(ClosedTab(url, title, item.optBoolean("desktop", false)))
+                }
+            }
+        } catch (_: Exception) {
+            recentlyClosedTabs.clear()
+        }
+
         downloads.clear()
         try {
             val savedDownloads = JSONArray(browserPrefs.getString("downloads", "[]"))
@@ -850,6 +871,27 @@ class MainActivity : Activity() {
             item.title = cleanTitle
             persistHistory()
         }
+    }
+
+    private fun persistRecentlyClosedTabs() {
+        val data = JSONArray()
+        recentlyClosedTabs.forEach { tab ->
+            data.put(
+                JSONObject()
+                    .put("url", tab.url)
+                    .put("title", tab.title ?: "")
+                    .put("desktop", tab.isDesktopMode)
+            )
+        }
+        browserPrefs.edit().putString("recently_closed_tabs", data.toString()).apply()
+    }
+
+    private fun rememberClosedTab(tab: BrowserTab) {
+        val url = tab.url?.takeIf { isWebUrl(it) } ?: return
+        recentlyClosedTabs.removeAll { it.url == url }
+        recentlyClosedTabs.add(0, ClosedTab(url, tab.title, tab.isDesktopMode))
+        while (recentlyClosedTabs.size > 10) recentlyClosedTabs.removeAt(recentlyClosedTabs.lastIndex)
+        persistRecentlyClosedTabs()
     }
 
     private fun persistDownloads() {
@@ -1871,6 +1913,7 @@ class MainActivity : Activity() {
 
         val wasCurrent = index == currentTabIndex
         val closing = tabs.removeAt(index)
+        rememberClosedTab(closing)
         closing.session.close()
 
         if (tabs.isEmpty()) {
@@ -1884,6 +1927,33 @@ class MainActivity : Activity() {
             currentTabIndex = tabs.lastIndex
         }
         switchToTab(currentTabIndex)
+    }
+
+    private fun reopenLastClosedTab() {
+        if (recentlyClosedTabs.isEmpty()) {
+            Toast.makeText(this, "No recently closed tabs", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (tabs.size >= maxOpenTabs) {
+            Toast.makeText(this, "Close a tab before reopening another", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val saved = recentlyClosedTabs.first()
+        val oldCount = tabs.size
+        createTab(switchTo = true)
+        if (tabs.size == oldCount) return
+
+        val restored = currentTab
+        applyDesktopMode(restored, saved.isDesktopMode)
+        restored.url = saved.url
+        restored.title = saved.title
+        restored.isHome = false
+        restored.session.loadUri(saved.url)
+        recentlyClosedTabs.removeAt(0)
+        persistRecentlyClosedTabs()
+        persistOpenTabsIfReady()
+        Toast.makeText(this, "Reopened closed tab", Toast.LENGTH_SHORT).show()
     }
 
     private fun updateTabCount() {
@@ -1913,6 +1983,7 @@ class MainActivity : Activity() {
 
         val keptTab = currentTab
         tabs.toList().filter { it !== keptTab }.forEach { tab ->
+            rememberClosedTab(tab)
             tab.session.close()
         }
         tabs.clear()
