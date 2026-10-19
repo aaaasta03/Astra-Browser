@@ -97,6 +97,7 @@ class MainActivity : Activity() {
     private val deniedDevicePermissionsPreference = "denied_device_permissions"
     private var pendingAndroidPermissionCallback: GeckoSession.PermissionDelegate.Callback? = null
     private var pendingAndroidPermissions: Array<String> = emptyArray()
+    private var trackingProtectionMenuItem: View? = null
     private var selectedSearchEngine = UrlNormalizer.SearchEngine.DUCKDUCKGO
     private val bookmarks = mutableListOf<Bookmark>()
 
@@ -113,6 +114,12 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The menu reads persistent settings while the UI is being built.
+        // Initialize preferences before constructing any views.
+        browserPrefs = getSharedPreferences("astra_browser_library", MODE_PRIVATE)
+        selectedSearchEngine = UrlNormalizer.SearchEngine.fromId(
+            browserPrefs.getString("search_engine", null)
+        )
         window.statusBarColor = pageBackground
         window.navigationBarColor = pageBackground
         window.decorView.systemUiVisibility = 0
@@ -192,10 +199,6 @@ class MainActivity : Activity() {
         ))
         setContentView(root)
 
-        browserPrefs = getSharedPreferences("astra_browser_library", MODE_PRIVATE)
-        selectedSearchEngine = UrlNormalizer.SearchEngine.fromId(
-            browserPrefs.getString("search_engine", null)
-        )
         homeSearch.hint = "Search with ${selectedSearchEngine.label}"
         loadBrowserLibrary()
 
@@ -475,12 +478,13 @@ class MainActivity : Activity() {
         menu.addView(sectionLabel("PRIVACY & TOOLS"), menuLabelParams().apply {
             topMargin = dp(22)
         })
-        menu.addView(menuItem(
+        trackingProtectionMenuItem = menuItem(
             "Tracking protection: ${if (isTrackingProtectionEnabled()) "On" else "Off"}",
             "Toggle GeckoView's built-in tracker blocking"
         ) {
             setTrackingProtectionEnabled(!isTrackingProtectionEnabled())
-        })
+        }
+        menu.addView(trackingProtectionMenuItem)
         menu.addView(menuItem("Settings & privacy", "Privacy status and roadmap") {
             showPrivacyInfo()
         })
@@ -704,15 +708,13 @@ class MainActivity : Activity() {
     private fun setTrackingProtectionEnabled(enabled: Boolean) {
         browserPrefs.edit().putBoolean("tracking_protection_enabled", enabled).apply()
         tabs.forEach { tab -> tab.session.settings.setUseTrackingProtection(enabled) }
+        val title = (trackingProtectionMenuItem as? LinearLayout)?.getChildAt(0) as? TextView
+        title?.text = "Tracking protection: ${if (enabled) "On" else "Off"}"
         Toast.makeText(
             this,
             if (enabled) "Tracking protection enabled" else "Tracking protection disabled",
             Toast.LENGTH_SHORT
         ).show()
-        if (menuOpen) {
-            closeMenu()
-            openMenu()
-        }
     }
 
     private fun showPrivacyInfo() {
