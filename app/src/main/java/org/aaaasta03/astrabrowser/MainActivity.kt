@@ -425,6 +425,9 @@ class MainActivity : Activity() {
         menu.addView(menuItem("New tab", "Open a separate browser tab") {
             createTab(switchTo = true)
         })
+        menu.addView(menuItem("Duplicate current tab", "Open this page in another tab") {
+            duplicateCurrentTab()
+        })
         menu.addView(menuItem("Switch tabs", "View and close open tabs") {
             showTabsDialog()
         })
@@ -1930,6 +1933,32 @@ class MainActivity : Activity() {
             currentTabIndex = tabs.lastIndex
         }
         switchToTab(currentTabIndex)
+    }
+
+    private fun duplicateCurrentTab() {
+        val source = currentTab
+        val previousCount = tabs.size
+        createTab(switchTo = true)
+        if (tabs.size == previousCount) return
+
+        val duplicate = currentTab
+        val sourceUrl = source.url?.takeIf { isWebUrl(it) }
+        duplicate.title = source.title
+        applyDesktopMode(duplicate, source.isDesktopMode)
+
+        if (source.isHome || sourceUrl == null) {
+            duplicate.url = null
+            duplicate.title = null
+            duplicate.isHome = true
+            switchToTab(tabs.lastIndex)
+        } else {
+            duplicate.url = sourceUrl
+            duplicate.isHome = false
+            duplicate.session.loadUri(sourceUrl)
+        }
+
+        persistOpenTabsIfReady()
+        Toast.makeText(this, "Tab duplicated", Toast.LENGTH_SHORT).show()
     }
 
     private fun reopenLastClosedTab() {
