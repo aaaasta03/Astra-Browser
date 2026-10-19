@@ -65,7 +65,8 @@ class MainActivity : Activity() {
         var loadProgress: Int = 0,
         var isDesktopMode: Boolean = false,
         var title: String? = null,
-        var shouldActivateOnNavigation: Boolean = false
+        var shouldActivateOnNavigation: Boolean = false,
+        val isPrivateMode: Boolean = false
     )
 
     private val tabs = mutableListOf<BrowserTab>()
@@ -430,8 +431,12 @@ class MainActivity : Activity() {
 
         menu.addView(sectionLabel("BROWSE"), menuLabelParams())
         menu.addView(menuItem("Home", "Return to Astra start page") { showHome() })
-        menu.addView(menuItem("New tab", "Open a separate browser tab") {
+        menu.addView(menuItem("New tab", "Open a regular browser tab") {
             createTab(switchTo = true)
+        })
+        menu.addView(menuItem("New private tab", "Browse without saving history or restoring this tab after restart") {
+            createTab(switchTo = true, privateMode = true)
+            Toast.makeText(this, "Private tab opened. Close it to end this private session.", Toast.LENGTH_LONG).show()
         })
         menu.addView(menuItem("Duplicate current tab", "Open this page in another tab") {
             duplicateCurrentTab()
@@ -883,7 +888,10 @@ class MainActivity : Activity() {
         browserPrefs.edit().putString("history", data.toString()).apply()
     }
 
-    private fun recordHistory(url: String) {
+    private fun recordHistory(url: String, session: GeckoSession? = null) {
+        val matchingTab = if (session != null) tabs.firstOrNull { it.session === session }
+            else tabs.firstOrNull { it.url == url }
+        if (matchingTab?.isPrivateMode == true) return
         val existingTitle = history.firstOrNull { it.url == url }?.title
         val tabTitle = tabs.firstOrNull { it.url == url }?.title
         history.removeAll { it.url == url }
@@ -1767,8 +1775,9 @@ class MainActivity : Activity() {
 
     private fun persistOpenTabsIfReady() {
         if (!::browserPrefs.isInitialized || restoringTabs) return
+        val regularTabs = tabs.filterNot { it.isPrivateMode }.take(maxOpenTabs)
         val data = JSONArray()
-        tabs.take(maxOpenTabs).forEach { tab ->
+        regularTabs.forEach { tab ->
             val savedUrl: Any = if (tab.isHome || !isWebUrl(tab.url)) JSONObject.NULL else tab.url!!
             data.put(
                 JSONObject()
@@ -1777,23 +1786,26 @@ class MainActivity : Activity() {
                     .put("title", tab.title ?: "")
             )
         }
-        val selected = if (tabs.isEmpty()) 0 else currentTabIndex.coerceIn(0, tabs.lastIndex)
+        val currentRegularIndex = regularTabs.indexOfFirst { it === tabs.getOrNull(currentTabIndex) }
+        val selected = if (currentRegularIndex >= 0) currentRegularIndex
+            else currentTabIndex.coerceAtMost((regularTabs.size - 1).coerceAtLeast(0))
         browserPrefs.edit()
             .putString("open_tabs", data.toString())
             .putInt("selected_tab", selected)
             .apply()
     }
 
-    private fun createTab(switchTo: Boolean) {
+    private fun createTab(switchTo: Boolean, privateMode: Boolean = false) {
         if (tabs.size >= maxOpenTabs) {
             Toast.makeText(this, "Astra supports up to $maxOpenTabs open tabs", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val newSession = GeckoSession()
+        val settings = GeckoSessionSettings.Builder().usePrivateMode(privateMode).build()
+        val newSession = GeckoSession(settings)
         newSession.open(runtime)
         configureSession(newSession)
-        tabs.add(BrowserTab(session = newSession))
+        tabs.add(BrowserTab(session = newSession, isPrivateMode = privateMode))
         if (switchTo) {
             switchToTab(tabs.lastIndex)
         } else {
@@ -2024,7 +2036,7 @@ class MainActivity : Activity() {
             override fun onTitleChange(session: GeckoSession, title: String?) {
                 val tab = tabs.firstOrNull { it.session === session } ?: return
                 tab.title = title?.trim()?.takeIf { it.isNotEmpty() }
-                tab.url?.let { updateHistoryTitle(it, tab.title) }
+                if (!tab.isPrivateMode) tab.url?.let { updateHistoryTitle(it, tab.title) }
                 persistOpenTabsIfReady()
             }
         }
@@ -2056,7 +2068,7 @@ class MainActivity : Activity() {
                 // Single-page apps (such as YouTube) can change the URL without a new
                 // page-stop event. Save changed locations here so History matches the bar.
                 if (urlChanged) {
-                    recordHistory(url)
+                    recordHistory(url, session)
                     persistOpenTabsIfReady()
                 }
             }
@@ -2076,7 +2088,11 @@ class MainActivity : Activity() {
 
                 // GeckoView opens and loads this newly-created session after this result
                 // is returned. Do not call open() or loadUri() here.
-                val popupSession = GeckoSession()
+                val sourceTab = tabs.firstOrNull { it.session === session }
+                val popupPrivate = sourceTab?.isPrivateMode == true
+                val popupSession = GeckoSession(
+                    GeckoSessionSettings.Builder().usePrivateMode(popupPrivate).build()
+                )
                 configureSession(popupSession)
                 val initialUrl = uri.takeIf { isWebUrl(it) }
                 tabs.add(
@@ -2084,7 +2100,8 @@ class MainActivity : Activity() {
                         session = popupSession,
                         url = initialUrl,
                         isHome = initialUrl == null,
-                        shouldActivateOnNavigation = true
+                        shouldActivateOnNavigation = true,
+                        isPrivateMode = popupPrivate
                     )
                 )
                 updateTabCount()
@@ -2126,7 +2143,7 @@ class MainActivity : Activity() {
                 if (!success) return
                 val url = tab.url ?: return
                 if (url.startsWith("https://") || url.startsWith("http://")) {
-                    recordHistory(url)
+                    recordHistory(url, session)
                 }
             }
         }
@@ -2155,7 +2172,7 @@ class MainActivity : Activity() {
 
         val wasCurrent = index == currentTabIndex
         val closing = tabs.removeAt(index)
-        rememberClosedTab(closing)
+        if (!closing.isPrivateMode) rememberClosedTab(closing)
         closing.session.close()
 
         if (tabs.isEmpty()) {
@@ -2174,7 +2191,7 @@ class MainActivity : Activity() {
     private fun duplicateCurrentTab() {
         val source = currentTab
         val previousCount = tabs.size
-        createTab(switchTo = true)
+        createTab(switchTo = true, privateMode = source.isPrivateMode)
         if (tabs.size == previousCount) return
 
         val duplicate = currentTab
@@ -2295,10 +2312,14 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun currentTabOrNull(): BrowserTab? = tabs.getOrNull(currentTabIndex)
+
     private fun updateTabCount() {
         if (::tabCountButton.isInitialized) {
-            tabCountButton.text = "▢ ${tabs.size}"
-            tabCountButton.contentDescription = "Show ${tabs.size} open tabs"
+            val privateCount = tabs.count { it.isPrivateMode }
+            tabCountButton.text = if (currentTabOrNull()?.isPrivateMode == true) "▣ ${tabs.size}" else "▢ ${tabs.size}"
+            tabCountButton.contentDescription =
+                "Show ${tabs.size} open tabs, including $privateCount private tabs"
         }
     }
 
@@ -2322,7 +2343,7 @@ class MainActivity : Activity() {
 
         val keptTab = currentTab
         tabs.toList().filter { it !== keptTab }.forEach { tab ->
-            rememberClosedTab(tab)
+            if (!tab.isPrivateMode) rememberClosedTab(tab)
             tab.session.close()
         }
         tabs.clear()
@@ -2398,7 +2419,8 @@ class MainActivity : Activity() {
                     val tabName = tab.title?.takeIf { it.isNotBlank() }
                         ?: tab.url
                         ?: "Astra start page"
-                    val titleLine = (if (index == currentTabIndex) "●  " else "○  ") + tabName
+                    val modeLabel = if (tab.isPrivateMode) "🕶 Private · " else ""
+                    val titleLine = (if (index == currentTabIndex) "●  " else "○  ") + modeLabel + tabName
                     text = if (tab.url.isNullOrBlank()) titleLine else "$titleLine\n${tab.url}"
                     textSize = 13f
                     maxLines = 2
