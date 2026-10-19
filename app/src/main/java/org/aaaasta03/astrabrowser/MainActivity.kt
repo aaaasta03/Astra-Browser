@@ -431,6 +431,9 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Reopen closed tab", "Restore the most recently closed webpage") {
             reopenLastClosedTab()
         })
+        menu.addView(menuItem("Recently closed tabs", "Choose from recently closed webpages") {
+            showRecentlyClosedTabsDialog()
+        })
         menu.addView(menuItem("Bookmark this page", "Save the current address") {
             bookmarkCurrentPage()
         })
@@ -1934,15 +1937,20 @@ class MainActivity : Activity() {
             Toast.makeText(this, "No recently closed tabs", Toast.LENGTH_SHORT).show()
             return
         }
+        reopenClosedTabAt(0)
+    }
+
+    private fun reopenClosedTabAt(index: Int) {
+        if (index !in recentlyClosedTabs.indices) return
         if (tabs.size >= maxOpenTabs) {
             Toast.makeText(this, "Close a tab before reopening another", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val saved = recentlyClosedTabs.first()
-        val oldCount = tabs.size
+        val saved = recentlyClosedTabs[index]
+        val previousCount = tabs.size
         createTab(switchTo = true)
-        if (tabs.size == oldCount) return
+        if (tabs.size == previousCount) return
 
         val restored = currentTab
         applyDesktopMode(restored, saved.isDesktopMode)
@@ -1950,10 +1958,76 @@ class MainActivity : Activity() {
         restored.title = saved.title
         restored.isHome = false
         restored.session.loadUri(saved.url)
-        recentlyClosedTabs.removeAt(0)
+        recentlyClosedTabs.removeAt(index)
         persistRecentlyClosedTabs()
         persistOpenTabsIfReady()
         Toast.makeText(this, "Reopened closed tab", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showRecentlyClosedTabsDialog() {
+        lateinit var dialog: AlertDialog
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(panel)
+        }
+
+        if (recentlyClosedTabs.isEmpty()) {
+            panel.addView(TextView(this).apply {
+                text = "No recently closed tabs. Pages you close will appear here."
+                textSize = 14f
+                setTextColor(secondaryText)
+                setPadding(dp(12), dp(18), dp(12), dp(18))
+            })
+        } else {
+            recentlyClosedTabs.toList().forEachIndexed { index, saved ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = rounded(panelColor, 12)
+                    isClickable = true
+                    isFocusable = true
+                    addView(TextView(this@MainActivity).apply {
+                        text = saved.title?.takeIf { it.isNotBlank() } ?: defaultBookmarkTitle(saved.url)
+                        textSize = 14f
+                        maxLines = 2
+                        setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+                        setTextColor(primaryText)
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = saved.url
+                        textSize = 12f
+                        maxLines = 2
+                        setTextColor(secondaryText)
+                        setPadding(0, dp(4), 0, 0)
+                    })
+                    if (saved.isDesktopMode) {
+                        addView(TextView(this@MainActivity).apply {
+                            text = "Desktop site"
+                            textSize = 11f
+                            setTextColor(accentColor)
+                            setPadding(0, dp(4), 0, 0)
+                        })
+                    }
+                    setOnClickListener {
+                        dialog.dismiss()
+                        reopenClosedTabAt(index)
+                    }
+                }
+                panel.addView(row, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) })
+            }
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Recently closed tabs · ${recentlyClosedTabs.size}")
+            .setView(scroll)
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun updateTabCount() {
