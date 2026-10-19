@@ -205,6 +205,7 @@ class MainActivity : Activity() {
         loadBrowserLibrary()
 
         runtime = GeckoRuntime.create(
+            applicationContext,
             GeckoRuntimeSettings.Builder()
                 .globalPrivacyControlEnabled(isGlobalPrivacyControlEnabled())
                 .build()
