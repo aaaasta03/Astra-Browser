@@ -98,6 +98,7 @@ class MainActivity : Activity() {
     private var pendingAndroidPermissionCallback: GeckoSession.PermissionDelegate.Callback? = null
     private var pendingAndroidPermissions: Array<String> = emptyArray()
     private var trackingProtectionMenuItem: View? = null
+    private var globalPrivacyControlMenuItem: View? = null
     private var selectedSearchEngine = UrlNormalizer.SearchEngine.DUCKDUCKGO
     private val bookmarks = mutableListOf<Bookmark>()
 
@@ -202,7 +203,11 @@ class MainActivity : Activity() {
         homeSearch.hint = "Search with ${selectedSearchEngine.label}"
         loadBrowserLibrary()
 
-        runtime = GeckoRuntime.create(applicationContext)
+        runtime = GeckoRuntime.create(
+            GeckoRuntimeSettings.Builder()
+                .globalPrivacyControlEnabled(isGlobalPrivacyControlEnabled())
+                .build()
+        )
         restoreOpenTabs()
     }
 
@@ -485,6 +490,13 @@ class MainActivity : Activity() {
             setTrackingProtectionEnabled(!isTrackingProtectionEnabled())
         }
         menu.addView(trackingProtectionMenuItem)
+        globalPrivacyControlMenuItem = menuItem(
+            "Global Privacy Control: ${if (isGlobalPrivacyControlEnabled()) "On" else "Off"}",
+            "Ask websites not to sell or share your personal data"
+        ) {
+            setGlobalPrivacyControlEnabled(!isGlobalPrivacyControlEnabled())
+        }
+        menu.addView(globalPrivacyControlMenuItem)
         menu.addView(menuItem("Settings & privacy", "Privacy status and roadmap") {
             showPrivacyInfo()
         })
@@ -702,6 +714,21 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun isGlobalPrivacyControlEnabled(): Boolean =
+        browserPrefs.getBoolean("global_privacy_control_enabled", true)
+
+    private fun setGlobalPrivacyControlEnabled(enabled: Boolean) {
+        browserPrefs.edit().putBoolean("global_privacy_control_enabled", enabled).apply()
+        runtime.settings.setGlobalPrivacyControl(enabled)
+        val title = (globalPrivacyControlMenuItem as? LinearLayout)?.getChildAt(0) as? TextView
+        title?.text = "Global Privacy Control: ${if (enabled) "On" else "Off"}"
+        Toast.makeText(
+            this,
+            if (enabled) "Global Privacy Control enabled" else "Global Privacy Control disabled",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
     private fun isTrackingProtectionEnabled(): Boolean =
         browserPrefs.getBoolean("tracking_protection_enabled", true)
 
@@ -723,6 +750,7 @@ class MainActivity : Activity() {
             .setMessage(
                 "Current protections:\n" +
                     "• GeckoView tracking protection is ${if (isTrackingProtectionEnabled()) "on" else "off"} for browser tabs.\n" +
+                    "• Global Privacy Control is ${if (isGlobalPrivacyControlEnabled()) "on" else "off"}; sites may choose how to respond.\n" +
                     "• Astra requests location, camera, or microphone access only when a website asks.\n" +
                     "• Location and camera/microphone requests require an Astra prompt; camera and microphone also require Android permission.\n" +
                     "• Other unsupported site permissions are denied by default.\n" +
@@ -730,7 +758,7 @@ class MainActivity : Activity() {
                     "• Clear browsing data removes saved history and GeckoView site data/permissions.\n\n" +
                     "Still in development:\n" +
                     "• Advanced anti-fingerprinting controls.\n" +
-                    "• Isolated private sessions and automatic data clearing.\n" +
+                    "• Automatic private-session data clearing.\n" +
                     "• Full site-permission management and extension permissions."
             )
             .setNeutralButton("Android app permissions") { _, _ -> openAndroidAppSettings() }
