@@ -818,13 +818,26 @@ class MainActivity : Activity() {
 
         val scroll = ScrollView(this).apply {
             isFillViewport = true
+            setBackgroundColor(pageBackground)
             addView(rows)
         }
+        val titleView = TextView(this).apply {
+            text = "Site permissions"
+            textSize = 22f
+            setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+            setTextColor(primaryText)
+            setPadding(dp(24), dp(18), dp(20), dp(8))
+            setBackgroundColor(pageBackground)
+        }
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Site permissions")
+            .setCustomTitle(titleView)
             .setView(scroll)
             .setNegativeButton("Done", null)
             .create()
+        dialog.setOnShowListener {
+            dialog.window?.setBackgroundDrawable(rounded(pageBackground, 18))
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(accentColor)
+        }
         dialog.show()
 
         fun loadPermissions() {
