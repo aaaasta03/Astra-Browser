@@ -1359,7 +1359,7 @@ class MainActivity : Activity() {
 
     private fun showReaderMode() {
         val tab = currentTab
-        val sourceUrl = tab.url
+        val sourceUrl = tab.url.orEmpty()
         if (tab.isHome || !isWebUrl(sourceUrl)) {
             Toast.makeText(this, "Open a webpage before using Reader mode", Toast.LENGTH_SHORT).show()
             return
@@ -1394,7 +1394,7 @@ class MainActivity : Activity() {
                             loading.dismiss()
                             Toast.makeText(
                                 this,
-                                "Reader mode couldn't extract this page: ${error.localizedMessage ?: "unsupported page"}",
+                                "Reader mode couldn't extract this page: ${error?.localizedMessage ?: "unsupported page"}",
                                 Toast.LENGTH_LONG
                             ).show()
                         }
@@ -1421,9 +1421,9 @@ class MainActivity : Activity() {
         }
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.rgb(250, 248, 242))
-            addView(body, ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT
+            addView(body, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
             ))
         }
         AlertDialog.Builder(this)
