@@ -719,15 +719,15 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Privacy & security")
             .setMessage(
-                "Current protections:\\n" +
-                    "• Tracking protection is ${if (isTrackingProtectionEnabled()) "on" else "off"} for browser tabs.\\n" +
+                "Current protections:\n" +
+                    "• GeckoView tracking protection is ${if (isTrackingProtectionEnabled()) "on" else "off"} for browser tabs.\n" +
                     "• Astra requests location, camera, or microphone access only when a website asks.\n" +
                     "• Location and camera/microphone requests require an Astra prompt; camera and microphone also require Android permission.\n" +
                     "• Other unsupported site permissions are denied by default.\n" +
                     "• Cleartext HTTP is disabled at the Android app level.\n" +
                     "• Clear browsing data removes saved history and GeckoView site data/permissions.\n\n" +
                     "Still in development:\n" +
-                    "• Tracker blocking and anti-fingerprinting controls.\n" +
+                    "• Advanced anti-fingerprinting controls.\n" +
                     "• Isolated private sessions and automatic data clearing.\n" +
                     "• Full site-permission management and extension permissions."
             )
