@@ -95,6 +95,8 @@ class MainActivity : Activity() {
 
     private lateinit var browserPrefs: SharedPreferences
     private val androidPermissionRequestCode = 4182
+    private val importBookmarksRequestCode = 4183
+    private val exportBookmarksRequestCode = 4184
     private val deniedDevicePermissionsPreference = "denied_device_permissions"
     private var pendingAndroidPermissionCallback: GeckoSession.PermissionDelegate.Callback? = null
     private var pendingAndroidPermissions: Array<String> = emptyArray()
@@ -476,6 +478,12 @@ class MainActivity : Activity() {
             toggleDesktopSite()
         })
         menu.addView(menuItem("Bookmarks", "Saved pages") { showBookmarksDialog() })
+        menu.addView(menuItem("Import bookmarks", "Merge bookmarks from an Astra JSON backup") {
+            importBookmarks()
+        })
+        menu.addView(menuItem("Export bookmarks", "Save a backup of your bookmarks as JSON") {
+            exportBookmarks()
+        })
         menu.addView(menuItem("History", "Recently visited pages") { showHistoryDialog() })
         menu.addView(menuItem("Downloads", "View and open downloaded files") { showDownloadsDialog() })
         menu.addView(menuItem("Search engine", "Choose the default web search provider") {
@@ -1959,6 +1967,97 @@ class MainActivity : Activity() {
         pendingAndroidPermissionCallback = callback
         pendingAndroidPermissions = requested
         requestPermissions(requested, androidPermissionRequestCode)
+    }
+
+    private fun importBookmarks() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+        }
+        try {
+            startActivityForResult(intent, importBookmarksRequestCode)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "No file picker is available", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun exportBookmarks() {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "astra-bookmarks.json")
+        }
+        try {
+            startActivityForResult(intent, exportBookmarksRequestCode)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "No file picker is available", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    @Deprecated("Deprecated by Android, retained for compatibility with this Activity-based app")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        when (requestCode) {
+            importBookmarksRequestCode -> readBookmarksBackup(uri)
+            exportBookmarksRequestCode -> writeBookmarksBackup(uri)
+        }
+    }
+
+    private fun writeBookmarksBackup(uri: Uri) {
+        val data = JSONObject()
+            .put("format", "astra-bookmarks")
+            .put("version", 1)
+            .put("bookmarks", JSONArray().apply {
+                bookmarks.forEach { bookmark ->
+                    put(JSONObject().put("title", bookmark.title).put("url", bookmark.url))
+                }
+            })
+        try {
+            contentResolver.openOutputStream(uri)?.use { stream ->
+                stream.write(data.toString(2).toByteArray(Charsets.UTF_8))
+            } ?: throw IllegalStateException("Could not open selected file")
+            Toast.makeText(this, "Exported ${bookmarks.size} bookmarks", Toast.LENGTH_LONG).show()
+        } catch (error: Exception) {
+            Toast.makeText(this, "Bookmark export failed: ${error.localizedMessage ?: "unknown error"}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun readBookmarksBackup(uri: Uri) {
+        try {
+            val raw = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                ?: throw IllegalStateException("Could not read selected file")
+            require(raw.length <= 2_000_000) { "Backup file is too large" }
+            val root = JSONObject(raw)
+            require(root.optString("format") == "astra-bookmarks") { "This is not an Astra bookmark backup" }
+            require(root.optInt("version", -1) == 1) { "Unsupported bookmark backup version" }
+            val entries = root.optJSONArray("bookmarks") ?: throw IllegalArgumentException("Backup has no bookmarks list")
+            val knownUrls = bookmarks.map { it.url }.toMutableSet()
+            var added = 0
+            var skipped = 0
+            val imported = mutableListOf<Bookmark>()
+            for (i in 0 until entries.length()) {
+                val entry = entries.optJSONObject(i)
+                if (entry == null) {
+                    skipped++
+                    continue
+                }
+                val url = entry.optString("url").trim()
+                if (!isWebUrl(url) || url.length > 8192 || !knownUrls.add(url)) {
+                    skipped++
+                    continue
+                }
+                val title = entry.optString("title").trim().take(500).ifBlank { defaultBookmarkTitle(url) }
+                imported.add(Bookmark(title, url))
+                added++
+            }
+            bookmarks.addAll(0, imported)
+            persistBookmarks()
+            Toast.makeText(this, "Imported $added bookmarks; skipped $skipped invalid or duplicate entries", Toast.LENGTH_LONG).show()
+        } catch (error: Exception) {
+            Toast.makeText(this, "Bookmark import failed: ${error.localizedMessage ?: "invalid backup"}", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onRequestPermissionsResult(
