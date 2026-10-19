@@ -475,6 +475,12 @@ class MainActivity : Activity() {
         menu.addView(sectionLabel("PRIVACY & TOOLS"), menuLabelParams().apply {
             topMargin = dp(22)
         })
+        menu.addView(menuItem(
+            "Tracking protection: ${if (isTrackingProtectionEnabled()) "On" else "Off"}",
+            "Toggle GeckoView's built-in tracker blocking"
+        ) {
+            setTrackingProtectionEnabled(!isTrackingProtectionEnabled())
+        })
         menu.addView(menuItem("Settings & privacy", "Privacy status and roadmap") {
             showPrivacyInfo()
         })
@@ -692,11 +698,29 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun isTrackingProtectionEnabled(): Boolean =
+        browserPrefs.getBoolean("tracking_protection_enabled", true)
+
+    private fun setTrackingProtectionEnabled(enabled: Boolean) {
+        browserPrefs.edit().putBoolean("tracking_protection_enabled", enabled).apply()
+        tabs.forEach { tab -> tab.session.settings.setUseTrackingProtection(enabled) }
+        Toast.makeText(
+            this,
+            if (enabled) "Tracking protection enabled" else "Tracking protection disabled",
+            Toast.LENGTH_SHORT
+        ).show()
+        if (menuOpen) {
+            closeMenu()
+            openMenu()
+        }
+    }
+
     private fun showPrivacyInfo() {
         AlertDialog.Builder(this)
             .setTitle("Privacy & security")
             .setMessage(
-                "Current protections:\n" +
+                "Current protections:\\n" +
+                    "• Tracking protection is ${if (isTrackingProtectionEnabled()) "on" else "off"} for browser tabs.\\n" +
                     "• Astra requests location, camera, or microphone access only when a website asks.\n" +
                     "• Location and camera/microphone requests require an Astra prompt; camera and microphone also require Android permission.\n" +
                     "• Other unsupported site permissions are denied by default.\n" +
@@ -2003,6 +2027,7 @@ class MainActivity : Activity() {
     }
 
     private fun configureSession(newSession: GeckoSession) {
+        newSession.settings.setUseTrackingProtection(isTrackingProtectionEnabled())
         newSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
             override fun onAndroidPermissionsRequest(
                 session: GeckoSession,
