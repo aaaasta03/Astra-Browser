@@ -1585,8 +1585,18 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    private fun getBookmarkFolders(): List<String> {
+        val stored = try {
+            val array = JSONArray(browserPrefs.getString("bookmark_folders", "[]"))
+            (0 until array.length()).mapNotNull { array.optString(it).trim().takeIf { name -> name.isNotBlank() } }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return (stored + bookmarks.map { it.folder }).distinct().filterNot { it.equals("All bookmarks", true) }.sorted()
+    }
+
     private fun showBookmarkFoldersDialog() {
-        val folders = (listOf("All bookmarks") + bookmarks.map { it.folder }.distinct().sorted())
+        val folders = (listOf("All bookmarks") + getBookmarkFolders())
         AlertDialog.Builder(this)
             .setTitle("Bookmark folders")
             .setItems(folders.toTypedArray()) { _, which ->
@@ -1619,11 +1629,21 @@ class MainActivity : Activity() {
                     Toast.makeText(this, "Choose another folder name", Toast.LENGTH_SHORT).show()
                 } else {
                     if (bookmark != null) {
+                        if (name !in getBookmarkFolders()) {
+                            browserPrefs.edit().putString(
+                                "bookmark_folders",
+                                JSONArray(getBookmarkFolders() + name).toString()
+                            ).apply()
+                        }
                         bookmark.folder = name
                         persistBookmarks()
                         showBookmarksDialog(name)
                     } else {
-                        Toast.makeText(this, "Folder created. Move bookmarks into it from bookmark options.", Toast.LENGTH_LONG).show()
+                        browserPrefs.edit().putString(
+                            "bookmark_folders",
+                            JSONArray((getBookmarkFolders() + name).distinct()).toString()
+                        ).apply()
+                        Toast.makeText(this, "Folder created", Toast.LENGTH_SHORT).show()
                         showBookmarkFoldersDialog()
                     }
                 }
@@ -1632,7 +1652,7 @@ class MainActivity : Activity() {
     }
 
     private fun showMoveBookmarkDialog(bookmark: Bookmark) {
-        val folders = (bookmarks.map { it.folder }.distinct().sorted() + "Create new folder…").distinct()
+        val folders = (getBookmarkFolders() + "Create new folder…").distinct()
         AlertDialog.Builder(this)
             .setTitle("Move to folder")
             .setItems(folders.toTypedArray()) { _, which ->
