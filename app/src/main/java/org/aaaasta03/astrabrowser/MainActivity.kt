@@ -1492,17 +1492,17 @@ class MainActivity : Activity() {
 
     private fun cleanReaderText(content: String): String {
         var text = content
-        text = text.replace(Regex("""!\\[([^\\]]*)]\\([^)]+\\)"""), "$1")
+        text = text.replace(Regex("""!\[([^\]]*)]\([^)]+\)"""), "$1")
         text = text.replace(
-            Regex("""\\[([^\\]]+)]\\((?:https?://|mailto:)[^)]+\\)"""),
+            Regex("""\[([^\]]+)]\((?:https?://|mailto:)[^)]+\)"""),
             "$1"
         )
-        text = text.replace(Regex("""(?m)^\\s{0,3}#{1,6}\\s+"""), "")
-        text = text.replace(Regex("""(?m)^\\s*>\\s?"""), "")
-        text = text.replace(Regex("""\\*\\*(.*?)\\*\\*"""), "$1")
-        text = text.replace(Regex("""(?<!\\*)\\*(?!\\*)(.*?)\\*(?!\\*)"""), "$1")
-        text = text.replace(Regex("""(?m)^\\s*[-*_]{3,}\\s*$"""), "")
-        return text.trim().replace(Regex("""\\n{3,}"""), "\n\n")
+        text = text.replace(Regex("""(?m)^\s{0,3}#{1,6}\s+"""), "")
+        text = text.replace(Regex("""(?m)^\s*>\s?"""), "")
+        text = text.replace(Regex("""\*\*(.*?)\*\*"""), "$1")
+        text = text.replace(Regex("""(?<!\*)\*(?!\*)(.*?)\*(?!\*)"""), "$1")
+        text = text.replace(Regex("""(?m)^\s*[-*_]{3,}\s*$"""), "")
+        return text.trim().replace(Regex("""\n{3,}"""), "\n\n")
     }
 
     private fun showReaderContent(title: String, sourceUrl: String, articleText: String) {
