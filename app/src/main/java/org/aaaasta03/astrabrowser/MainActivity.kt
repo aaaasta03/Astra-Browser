@@ -2097,67 +2097,114 @@ class MainActivity : Activity() {
     }
 
     private fun showTabsDialog() {
-        val panel = LinearLayout(this).apply {
+        lateinit var dialog: AlertDialog
+        val contentPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
-        val dialog = AlertDialog.Builder(this)
+        val searchField = EditText(this).apply {
+            hint = "Search tabs by title or URL"
+            setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            textSize = 14f
+            setTextColor(primaryText)
+            setHintTextColor(secondaryText)
+            setPadding(dp(14), 0, dp(12), 0)
+            background = rounded(fieldColor, 14)
+        }
+        contentPanel.addView(searchField, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(48)
+        ).apply { bottomMargin = dp(8) })
+
+        val listPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(listPanel)
+        }
+        contentPanel.addView(scroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(360)
+        ))
+
+        fun renderTabs(query: String) {
+            listPanel.removeAllViews()
+            val trimmedQuery = query.trim()
+            val entries = tabs.mapIndexed { index, tab -> index to tab }.filter { (_, tab) ->
+                trimmedQuery.isEmpty() ||
+                    tab.title.orEmpty().contains(trimmedQuery, ignoreCase = true) ||
+                    tab.url.orEmpty().contains(trimmedQuery, ignoreCase = true) ||
+                    (tab.isHome && "Astra start page".contains(trimmedQuery, ignoreCase = true))
+            }
+
+            if (entries.isEmpty()) {
+                listPanel.addView(TextView(this).apply {
+                    text = if (tabs.isEmpty()) {
+                        "No open tabs."
+                    } else {
+                        "No tabs match \"$trimmedQuery\"."
+                    }
+                    textSize = 14f
+                    setTextColor(secondaryText)
+                    setPadding(dp(12), dp(18), dp(12), dp(18))
+                })
+                return
+            }
+
+            entries.forEach { (index, tab) ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(8), dp(4), dp(4), dp(4))
+                    background = rounded(panelColor, 12)
+                }
+                val label = TextView(this).apply {
+                    val tabName = tab.title?.takeIf { it.isNotBlank() }
+                        ?: tab.url
+                        ?: "Astra start page"
+                    val titleLine = (if (index == currentTabIndex) "●  " else "○  ") + tabName
+                    text = if (tab.url.isNullOrBlank()) titleLine else "$titleLine\n${tab.url}"
+                    textSize = 13f
+                    maxLines = 2
+                    setTextColor(if (index == currentTabIndex) accentColor else primaryText)
+                    setPadding(dp(6), 0, dp(4), 0)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        dialog.dismiss()
+                        switchToTab(index)
+                    }
+                }
+                val close = TextView(this).apply {
+                    text = "×"
+                    textSize = 24f
+                    gravity = Gravity.CENTER
+                    setTextColor(primaryText)
+                    contentDescription = "Close tab"
+                    isClickable = true
+                    isFocusable = true
+                    setPadding(dp(12), 0, dp(12), 0)
+                    setOnClickListener {
+                        dialog.dismiss()
+                        closeTabAt(index)
+                        showTabsDialog()
+                    }
+                }
+                row.addView(label, LinearLayout.LayoutParams(0, dp(60), 1f))
+                row.addView(close, LinearLayout.LayoutParams(dp(44), dp(48)))
+                listPanel.addView(row, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(66)
+                ).apply { bottomMargin = dp(6) })
+            }
+        }
+
+        dialog = AlertDialog.Builder(this)
             .setTitle("Open tabs · ${tabs.size}")
-            .setView(panel)
+            .setView(contentPanel)
             .setNeutralButton("Tab actions", null)
             .setNegativeButton("Done", null)
             .setPositiveButton("New tab", null)
             .create()
-
-        tabs.forEachIndexed { index, tab ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(8), dp(4), dp(4), dp(4))
-                background = rounded(panelColor, 12)
-            }
-            val label = TextView(this).apply {
-                val tabName = tab.title?.takeIf { it.isNotBlank() }
-                    ?: tab.url
-                    ?: "Astra start page"
-                val titleLine = (if (index == currentTabIndex) "●  " else "○  ") + tabName
-                text = if (tab.url.isNullOrBlank()) {
-                    titleLine
-                } else {
-                    "$titleLine\n${tab.url}"
-                }
-                textSize = 13f
-                maxLines = 2
-                setTextColor(if (index == currentTabIndex) accentColor else primaryText)
-                setPadding(dp(6), 0, dp(4), 0)
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    dialog.dismiss()
-                    switchToTab(index)
-                }
-            }
-            val close = TextView(this).apply {
-                text = "×"
-                textSize = 24f
-                gravity = Gravity.CENTER
-                setTextColor(primaryText)
-                contentDescription = "Close tab"
-                isClickable = true
-                isFocusable = true
-                setPadding(dp(12), 0, dp(12), 0)
-                setOnClickListener {
-                    dialog.dismiss()
-                    closeTabAt(index)
-                    showTabsDialog()
-                }
-            }
-            row.addView(label, LinearLayout.LayoutParams(0, dp(60), 1f))
-            row.addView(close, LinearLayout.LayoutParams(dp(44), dp(48)))
-            panel.addView(row, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(66)
-            ).apply { bottomMargin = dp(6) })
-        }
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -2212,6 +2259,15 @@ class MainActivity : Activity() {
                     .show()
             }
         }
+        searchField.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                renderTabs(s?.toString().orEmpty())
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
+        renderTabs("")
         dialog.show()
     }
 
