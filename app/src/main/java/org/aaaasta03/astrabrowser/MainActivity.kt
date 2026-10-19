@@ -44,6 +44,7 @@ import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.PageExtractionController
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.StorageController
@@ -479,6 +480,9 @@ class MainActivity : Activity() {
         })
         menu.addView(menuItem("Find in page", "Search for text on this webpage") {
             showFindInPageDialog()
+        })
+        menu.addView(menuItem("Reader mode", "Extract the article into a clean reading view") {
+            showReaderMode()
         })
         menu.addView(menuItem("Desktop site", "Switch the current tab to desktop layout") {
             toggleDesktopSite()
@@ -1351,6 +1355,92 @@ class MainActivity : Activity() {
             putExtra(Intent.EXTRA_SUBJECT, url)
         }
         startActivity(Intent.createChooser(shareIntent, "Share page"))
+    }
+
+    private fun showReaderMode() {
+        val tab = currentTab
+        val sourceUrl = tab.url
+        if (tab.isHome || !isWebUrl(sourceUrl)) {
+            Toast.makeText(this, "Open a webpage before using Reader mode", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val loading = AlertDialog.Builder(this)
+            .setTitle("Reader mode")
+            .setMessage("Extracting readable page content…")
+            .setNegativeButton("Cancel", null)
+            .create()
+        loading.show()
+
+        try {
+            tab.session.sessionPageExtractor
+                .getPageContent(PageExtractionController.ContentParams(true))
+                .accept(
+                    { extracted ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            loading.dismiss()
+                            val text = extracted.toString().trim()
+                            if (text.isBlank()) {
+                                Toast.makeText(this, "No readable text was found on this page", Toast.LENGTH_LONG).show()
+                                return@runOnUiThread
+                            }
+                            showReaderContent(tab.title?.takeIf { it.isNotBlank() } ?: sourceUrl, sourceUrl, text)
+                        }
+                    },
+                    { error ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            loading.dismiss()
+                            Toast.makeText(
+                                this,
+                                "Reader mode couldn't extract this page: ${error.localizedMessage ?: "unsupported page"}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                )
+        } catch (error: Exception) {
+            loading.dismiss()
+            Toast.makeText(
+                this,
+                "Reader mode unavailable: ${error.localizedMessage ?: "unsupported page"}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun showReaderContent(title: String, sourceUrl: String, articleText: String) {
+        val body = TextView(this).apply {
+            text = articleText
+            textSize = 18f
+            setTextColor(Color.rgb(35, 35, 35))
+            setPadding(dp(20), dp(18), dp(20), dp(24))
+            setTextIsSelectable(true)
+            setLineSpacing(dp(4).toFloat(), 1.08f)
+        }
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.rgb(250, 248, 242))
+            addView(body, ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        AlertDialog.Builder(this)
+            .setTitle(title.take(120))
+            .setView(scroll)
+            .setNeutralButton("Share source") { _, _ -> shareText(sourceUrl, title) }
+            .setPositiveButton("Done", null)
+            .show()
+    }
+
+    private fun shareText(url: String, title: String) {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, url)
+            putExtra(Intent.EXTRA_SUBJECT, title)
+        }
+        startActivity(Intent.createChooser(intent, "Share article"))
     }
 
     private fun showFindInPageDialog() {
