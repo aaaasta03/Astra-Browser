@@ -2,14 +2,17 @@ package org.aaaasta03.astrabrowser
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.net.Uri
@@ -29,6 +32,7 @@ import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import org.mozilla.geckoview.WebResponse
 import org.json.JSONArray
 import org.json.JSONObject
@@ -88,6 +92,10 @@ class MainActivity : Activity() {
     private val accentColor = Color.rgb(143, 221, 199)
 
     private lateinit var browserPrefs: SharedPreferences
+    private val androidPermissionRequestCode = 4182
+    private val deniedDevicePermissionsPreference = "denied_device_permissions"
+    private var pendingAndroidPermissionCallback: GeckoSession.PermissionDelegate.Callback? = null
+    private var pendingAndroidPermissions: Array<String> = emptyArray()
     private var selectedSearchEngine = UrlNormalizer.SearchEngine.DUCKDUCKGO
     private val bookmarks = mutableListOf<Bookmark>()
 
@@ -683,18 +691,32 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Privacy & security")
             .setMessage(
-                "Current prototype:\n" +
-                    "• Only the Internet permission is declared by Astra.\n" +
+                "Current protections:\n" +
+                    "• Astra requests location, camera, or microphone access only when a website asks.\n" +
+                    "• Location and camera/microphone requests require an Astra prompt; camera and microphone also require Android permission.\n" +
+                    "• Other unsupported site permissions are denied by default.\n" +
                     "• Cleartext HTTP is disabled at the Android app level.\n" +
-                    "• The address bar restricts direct navigation to HTTP(S) destinations.\n" +
-                    "• Clear browsing data removes saved history and GeckoView site data.\n\n" +
+                    "• Clear browsing data removes saved history and GeckoView site data/permissions.\n\n" +
                     "Still in development:\n" +
                     "• Tracker blocking and anti-fingerprinting controls.\n" +
-                    "• Private sessions and automatic data clearing.\n" +
-                    "• Site-permission controls and extension permissions."
+                    "• Isolated private sessions and automatic data clearing.\n" +
+                    "• Full site-permission management and extension permissions."
             )
+            .setNeutralButton("Android app permissions") { _, _ -> openAndroidAppSettings() }
             .setPositiveButton("OK", null)
             .show()
+    }
+
+    private fun openAndroidAppSettings() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:$packageName")
+        )
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "Could not open Android app settings", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showClearBrowsingDataDialog() {
@@ -1779,7 +1801,221 @@ class MainActivity : Activity() {
         }
     }
 
+
+    private fun permissionOrigin(uri: String): String =
+        Uri.parse(uri).host?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: "This website"
+
+    private fun isLocationPermission(permission: String): Boolean =
+        permission == Manifest.permission.ACCESS_COARSE_LOCATION ||
+            permission == Manifest.permission.ACCESS_FINE_LOCATION
+
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun isAndroidPermissionGranted(permission: String): Boolean =
+        if (isLocationPermission(permission)) hasLocationPermission()
+        else ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun deniedDevicePermissions(): MutableSet<String> =
+        (browserPrefs.getStringSet(deniedDevicePermissionsPreference, emptySet())
+            ?: emptySet()).toMutableSet()
+
+    private fun clearDenialsForGrantedPermissions(permissions: Array<out String>) {
+        val denied = deniedDevicePermissions()
+        var changed = false
+        permissions.forEach { permission ->
+            if (isAndroidPermissionGranted(permission)) {
+                changed = denied.remove(if (isLocationPermission(permission)) "location" else permission) || changed
+            }
+        }
+        if (permissions.any { isLocationPermission(it) } && hasLocationPermission()) {
+            changed = denied.remove("location") || changed
+        }
+        if (changed) browserPrefs.edit().putStringSet(deniedDevicePermissionsPreference, denied).apply()
+    }
+
+    private fun rememberDevicePermissionResults(permissions: Array<out String>) {
+        val denied = deniedDevicePermissions()
+        permissions.filterNot { isLocationPermission(it) }.forEach { permission ->
+            if (isAndroidPermissionGranted(permission)) denied.remove(permission) else denied.add(permission)
+        }
+        if (permissions.any { isLocationPermission(it) }) {
+            if (hasLocationPermission()) denied.remove("location") else denied.add("location")
+        }
+        browserPrefs.edit().putStringSet(deniedDevicePermissionsPreference, denied).apply()
+    }
+
+    private fun handleAndroidPermissionRequest(
+        permissions: Array<out String>?,
+        callback: GeckoSession.PermissionDelegate.Callback
+    ) {
+        val requested = permissions?.distinct()?.toTypedArray() ?: emptyArray()
+        val supported = setOf(
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+        )
+        if (requested.isEmpty() || requested.any { it !in supported }) {
+            callback.reject()
+            return
+        }
+
+        clearDenialsForGrantedPermissions(requested)
+        if (requested.all { isAndroidPermissionGranted(it) }) {
+            callback.grant()
+            return
+        }
+
+        val deniedBefore = deniedDevicePermissions()
+        val previouslyBlocked = requested.any { permission ->
+            !isAndroidPermissionGranted(permission) &&
+                (if (isLocationPermission(permission)) "location" else permission) in deniedBefore
+        }
+        if (previouslyBlocked) {
+            Toast.makeText(
+                this,
+                "A device permission was previously blocked. Review Android app permissions to try again.",
+                Toast.LENGTH_LONG
+            ).show()
+            callback.reject()
+            return
+        }
+        if (pendingAndroidPermissionCallback != null || isFinishing || isDestroyed) {
+            callback.reject()
+            return
+        }
+        pendingAndroidPermissionCallback = callback
+        pendingAndroidPermissions = requested
+        requestPermissions(requested, androidPermissionRequestCode)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != androidPermissionRequestCode) return
+
+        val callback = pendingAndroidPermissionCallback
+        val requested = pendingAndroidPermissions
+        pendingAndroidPermissionCallback = null
+        pendingAndroidPermissions = emptyArray()
+        rememberDevicePermissionResults(requested)
+
+        val granted = requested.isNotEmpty() && requested.all { isAndroidPermissionGranted(it) }
+        if (granted) callback?.grant()
+        else {
+            callback?.reject()
+            Toast.makeText(this, "Android device permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun handleContentPermissionRequest(
+        perm: GeckoSession.PermissionDelegate.ContentPermission
+    ): GeckoResult<Int> {
+        val valueAllow = GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+        val valueDeny = GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+        if (perm.value == valueAllow) return GeckoResult.fromValue(valueAllow)
+        if (perm.value == valueDeny) return GeckoResult.fromValue(valueDeny)
+
+        // Location is the only content permission Astra currently handles with a prompt.
+        // Notifications, persistent storage, tracking exceptions, and unknown types remain
+        // denied until their complete UI and revocation flows are implemented.
+        if (perm.permission != GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION) {
+            return GeckoResult.fromValue(valueDeny)
+        }
+        if (isFinishing || isDestroyed) return GeckoResult.fromValue(valueDeny)
+
+        val origin = permissionOrigin(perm.uri)
+        val result = GeckoResult<Int>()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Allow $origin to access your location?")
+            .setMessage(
+                "Only allow location access on sites you trust. Android may also ask for device " +
+                    "permission. Saved site permissions can be reset with Clear browsing data."
+            )
+            .setNegativeButton("Block") { _, _ -> result.complete(valueDeny) }
+            .setPositiveButton("Allow") { _, _ -> result.complete(valueAllow) }
+            .create()
+        dialog.setOnCancelListener { result.complete(valueDeny) }
+        dialog.setOnShowListener { perm.notifyShown() }
+        dialog.show()
+        return result
+    }
+
+    private fun handleMediaPermissionRequest(
+        uri: String,
+        video: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+        audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+        callback: GeckoSession.PermissionDelegate.MediaCallback
+    ) {
+        val wantsCamera = !video.isNullOrEmpty()
+        val wantsMicrophone = !audio.isNullOrEmpty()
+        if ((!wantsCamera && !wantsMicrophone) ||
+            (wantsCamera && !isAndroidPermissionGranted(Manifest.permission.CAMERA)) ||
+            (wantsMicrophone && !isAndroidPermissionGranted(Manifest.permission.RECORD_AUDIO)) ||
+            isFinishing || isDestroyed
+        ) {
+            callback.reject()
+            return
+        }
+
+        val requestedDevices = buildList {
+            if (wantsCamera) add("camera")
+            if (wantsMicrophone) add("microphone")
+        }.joinToString(" and ")
+        val origin = permissionOrigin(uri)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Allow $origin to use $requestedDevices?")
+            .setMessage(
+                "Astra will provide only the requested device source for this request. " +
+                    "Block access if you do not trust this site."
+            )
+            .setNegativeButton("Block") { _, _ -> callback.reject() }
+            .setPositiveButton("Allow") { _, _ ->
+                val selectedVideo = if (wantsCamera) video?.firstOrNull() else null
+                val selectedAudio = if (wantsMicrophone) audio?.firstOrNull() else null
+                if ((wantsCamera && selectedVideo == null) ||
+                    (wantsMicrophone && selectedAudio == null)
+                ) callback.reject()
+                else callback.grant(selectedVideo?.id, selectedAudio?.id)
+            }
+            .create()
+        dialog.setOnCancelListener { callback.reject() }
+        dialog.show()
+    }
+
     private fun configureSession(newSession: GeckoSession) {
+        newSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
+            override fun onAndroidPermissionsRequest(
+                session: GeckoSession,
+                permissions: Array<out String>?,
+                callback: GeckoSession.PermissionDelegate.Callback
+            ) {
+                handleAndroidPermissionRequest(permissions, callback)
+            }
+
+            override fun onContentPermissionRequest(
+                session: GeckoSession,
+                perm: GeckoSession.PermissionDelegate.ContentPermission
+            ): GeckoResult<Int> = handleContentPermissionRequest(perm)
+
+            override fun onMediaPermissionRequest(
+                session: GeckoSession,
+                uri: String,
+                video: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+                audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+                callback: GeckoSession.PermissionDelegate.MediaCallback
+            ) {
+                handleMediaPermissionRequest(uri, video, audio, callback)
+            }
+        }
+
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 handleExternalResponse(response)
@@ -2280,6 +2516,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        pendingAndroidPermissionCallback?.reject()
+        pendingAndroidPermissionCallback = null
+        pendingAndroidPermissions = emptyArray()
         persistOpenTabsIfReady()
         tabs.forEach { tab -> tab.session.close() }
         tabs.clear()
