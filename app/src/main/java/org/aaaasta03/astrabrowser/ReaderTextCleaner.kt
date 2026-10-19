@@ -16,6 +16,8 @@ object ReaderTextCleaner {
         text = text.replace(Regex("""\*\*(.*?)\*\*"""), "$1")
         text = text.replace(Regex("""(?<!\*)\*(?!\*)(.*?)\*(?!\*)"""), "$1")
         text = text.replace(Regex("""(?m)^\s*[-*_]{3,}\s*$"""), "")
-        return text.trim().replace(Regex("""\n{3,}"""), "\n\n")
+        return text.lines().joinToString("\n") { it.trimEnd() }
+            .trim()
+            .replace(Regex("""\n{3,}"""), "\n\n")
     }
 }
