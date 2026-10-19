@@ -497,6 +497,9 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Search engine", "Choose the default web search provider") {
             showSearchEngineDialog()
         })
+        menu.addView(menuItem("Homepage", "Choose the page opened in new tabs") {
+            showHomepageDialog()
+        })
 
         menu.addView(sectionLabel("PRIVACY & TOOLS"), menuLabelParams().apply {
             topMargin = dp(22)
@@ -2010,6 +2013,53 @@ class MainActivity : Activity() {
             .apply()
     }
 
+    private fun getCustomHomepage(): String =
+        browserPrefs.getString("custom_homepage", "")?.trim().orEmpty().takeIf { isWebUrl(it) }.orEmpty()
+
+    private fun showHomepageDialog() {
+        val input = EditText(this).apply {
+            hint = "https://example.com (leave empty for Astra start page)"
+            setSingleLine(true)
+            setText(getCustomHomepage())
+            setTextColor(primaryText)
+            setHintTextColor(secondaryText)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = rounded(fieldColor, 14)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
+        AlertDialog.Builder(this)
+            .setTitle("New-tab homepage")
+            .setMessage("Choose a website to open in new regular tabs. Leave blank to use Astra's built-in start page. Existing tabs won't change.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Use Astra start page") { _, _ ->
+                browserPrefs.edit().remove("custom_homepage").apply()
+                Toast.makeText(this, "Astra start page restored", Toast.LENGTH_SHORT).show()
+            }
+            .setPositiveButton("Save", null)
+            .create()
+            .also { dialog ->
+                dialog.setOnShowListener {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val value = input.text?.toString()?.trim().orEmpty()
+                        if (value.isBlank()) {
+                            browserPrefs.edit().remove("custom_homepage").apply()
+                            dialog.dismiss()
+                            Toast.makeText(this, "Astra start page restored", Toast.LENGTH_SHORT).show()
+                        } else if (!isWebUrl(value)) {
+                            input.error = "Enter a valid http:// or https:// address"
+                        } else {
+                            browserPrefs.edit().putString("custom_homepage", value).apply()
+                            dialog.dismiss()
+                            Toast.makeText(this, "Homepage saved for new tabs", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                dialog.show()
+            }
+    }
+
     private fun createTab(switchTo: Boolean, privateMode: Boolean = false) {
         if (tabs.size >= maxOpenTabs) {
             Toast.makeText(this, "Astra supports up to $maxOpenTabs open tabs", Toast.LENGTH_SHORT).show()
@@ -2020,7 +2070,17 @@ class MainActivity : Activity() {
         val newSession = GeckoSession(settings)
         newSession.open(runtime)
         configureSession(newSession)
-        tabs.add(BrowserTab(session = newSession, isPrivateMode = privateMode))
+        val newTab = BrowserTab(session = newSession, isPrivateMode = privateMode)
+        tabs.add(newTab)
+        // Only apply the custom homepage to explicitly created regular tabs.
+        // Restored tabs and private tabs keep their existing behavior.
+        if (switchTo && !privateMode && !restoringTabs) {
+            getCustomHomepage().takeIf { it.isNotBlank() }?.let { homepage ->
+                newTab.url = homepage
+                newTab.isHome = false
+                newSession.loadUri(homepage)
+            }
+        }
         if (switchTo) {
             switchToTab(tabs.lastIndex)
         } else {
