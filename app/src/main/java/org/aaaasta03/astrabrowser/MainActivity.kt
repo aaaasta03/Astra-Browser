@@ -1905,6 +1905,23 @@ class MainActivity : Activity() {
         Toast.makeText(this, "All tabs closed", Toast.LENGTH_SHORT).show()
     }
 
+    private fun closeOtherTabs() {
+        if (tabs.size <= 1) {
+            Toast.makeText(this, "Only one tab is open", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val keptTab = currentTab
+        tabs.toList().filter { it !== keptTab }.forEach { tab ->
+            tab.session.close()
+        }
+        tabs.clear()
+        tabs.add(keptTab)
+        currentTabIndex = 0
+        switchToTab(0)
+        Toast.makeText(this, "Other tabs closed", Toast.LENGTH_SHORT).show()
+    }
+
     private fun showTabsDialog() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1913,7 +1930,7 @@ class MainActivity : Activity() {
         val dialog = AlertDialog.Builder(this)
             .setTitle("Open tabs · ${tabs.size}")
             .setView(panel)
-            .setNeutralButton("Close all", null)
+            .setNeutralButton("Tab actions", null)
             .setNegativeButton("Done", null)
             .setPositiveButton("New tab", null)
             .create()
@@ -1975,16 +1992,49 @@ class MainActivity : Activity() {
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
                 AlertDialog.Builder(this)
-                    .setTitle("Close all tabs?")
-                    .setMessage(
-                        "This closes every open tab and opens a fresh start page. " +
-                            "Bookmarks, history, and downloaded files will be kept."
-                    )
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Close all") { _, _ ->
-                        dialog.dismiss()
-                        closeAllTabs()
+                    .setTitle("Tab actions")
+                    .setItems(arrayOf("Close other tabs", "Close all tabs")) { _, which ->
+                        when (which) {
+                            0 -> {
+                                if (tabs.size <= 1) {
+                                    Toast.makeText(
+                                        this,
+                                        "Only one tab is open",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    AlertDialog.Builder(this)
+                                        .setTitle("Close other tabs?")
+                                        .setMessage(
+                                            "Keep the current tab open and close the other " +
+                                                "${tabs.size - 1} tab(s). Bookmarks, history, " +
+                                                "and downloads will be kept."
+                                        )
+                                        .setNegativeButton("Cancel", null)
+                                        .setPositiveButton("Close other tabs") { _, _ ->
+                                            dialog.dismiss()
+                                            closeOtherTabs()
+                                        }
+                                        .show()
+                                }
+                            }
+                            1 -> {
+                                AlertDialog.Builder(this)
+                                    .setTitle("Close all tabs?")
+                                    .setMessage(
+                                        "This closes every open tab and opens a fresh start page. " +
+                                            "Bookmarks, history, and downloaded files will be kept."
+                                    )
+                                    .setNegativeButton("Cancel", null)
+                                    .setPositiveButton("Close all") { _, _ ->
+                                        dialog.dismiss()
+                                        closeAllTabs()
+                                    }
+                                    .show()
+                            }
+                        }
                     }
+                    .setNegativeButton("Cancel", null)
                     .show()
             }
         }
