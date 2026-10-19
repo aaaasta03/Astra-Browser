@@ -1394,7 +1394,7 @@ class MainActivity : Activity() {
                             return@runOnUiThread
                         }
 
-                        if (!metadata.isReaderable) {
+                        if (metadata?.isReaderable != true) {
                             finishLoading()
                             Toast.makeText(
                                 this,
@@ -1416,7 +1416,7 @@ class MainActivity : Activity() {
                                             return@runOnUiThread
                                         }
                                         finishLoading()
-                                        val text = cleanReaderText(extracted).trim()
+                                        val text = cleanReaderText(extracted.orEmpty()).trim()
                                         if (text.isBlank()) {
                                             Toast.makeText(
                                                 this,
