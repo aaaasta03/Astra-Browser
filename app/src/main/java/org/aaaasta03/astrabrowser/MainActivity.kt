@@ -1259,24 +1259,62 @@ class MainActivity : Activity() {
 
     private fun showBookmarksDialog() {
         lateinit var dialog: AlertDialog
-        val panel = LinearLayout(this).apply {
+
+        val contentPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
+        val searchField = EditText(this).apply {
+            hint = "Search bookmarks by title or URL"
+            setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            textSize = 14f
+            setTextColor(primaryText)
+            setHintTextColor(secondaryText)
+            setPadding(dp(14), 0, dp(12), 0)
+            background = rounded(fieldColor, 14)
+        }
+        contentPanel.addView(searchField, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(48)
+        ).apply { bottomMargin = dp(8) })
+
+        val listPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
         val scroll = ScrollView(this).apply {
             isFillViewport = true
-            addView(panel)
+            addView(listPanel)
         }
+        contentPanel.addView(scroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(340)
+        ))
 
-        if (bookmarks.isEmpty()) {
-            panel.addView(TextView(this).apply {
-                text = "No bookmarks yet. Open a page and choose ‘Bookmark this page’ from the menu."
-                textSize = 14f
-                setTextColor(secondaryText)
-                setPadding(dp(12), dp(18), dp(12), dp(18))
-            })
-        } else {
-            bookmarks.toList().forEach { bookmark ->
+        fun renderBookmarks(query: String) {
+            listPanel.removeAllViews()
+            val trimmedQuery = query.trim()
+            val entries = bookmarks.toList().filter { bookmark ->
+                trimmedQuery.isEmpty() ||
+                    bookmark.title.contains(trimmedQuery, ignoreCase = true) ||
+                    bookmark.url.contains(trimmedQuery, ignoreCase = true)
+            }
+
+            if (entries.isEmpty()) {
+                listPanel.addView(TextView(this).apply {
+                    text = when {
+                        bookmarks.isEmpty() ->
+                            "No bookmarks yet. Open a page and choose ‘Bookmark this page’ from the menu."
+                        trimmedQuery.isNotEmpty() ->
+                            "No bookmarks match \"$trimmedQuery\"."
+                        else -> "No bookmarks yet."
+                    }
+                    textSize = 14f
+                    setTextColor(secondaryText)
+                    setPadding(dp(12), dp(18), dp(12), dp(18))
+                })
+                return
+            }
+
+            entries.forEach { bookmark ->
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(dp(12), dp(12), dp(12), dp(12))
@@ -1307,7 +1345,7 @@ class MainActivity : Activity() {
                         true
                     }
                 }
-                panel.addView(row, LinearLayout.LayoutParams(
+                listPanel.addView(row, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(6) })
             }
@@ -1315,7 +1353,7 @@ class MainActivity : Activity() {
 
         dialog = AlertDialog.Builder(this)
             .setTitle("Bookmarks · ${bookmarks.size}")
-            .setView(scroll)
+            .setView(contentPanel)
             .setNegativeButton("Close", null)
             .setPositiveButton("Bookmark current page", null)
             .create()
@@ -1326,6 +1364,15 @@ class MainActivity : Activity() {
                 showBookmarksDialog()
             }
         }
+        searchField.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                renderBookmarks(s?.toString().orEmpty())
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
+        renderBookmarks("")
         dialog.show()
     }
 
