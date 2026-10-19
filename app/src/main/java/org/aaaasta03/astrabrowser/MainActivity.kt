@@ -522,6 +522,9 @@ class MainActivity : Activity() {
             setGlobalPrivacyControlEnabled(!isGlobalPrivacyControlEnabled())
         }
         menu.addView(globalPrivacyControlMenuItem)
+        menu.addView(menuItem("Site permissions", "Review and reset saved website permissions") {
+            showSitePermissionsDialog()
+        })
         menu.addView(menuItem("Settings & privacy", "Privacy status and roadmap") {
             showPrivacyInfo()
         })
@@ -767,6 +770,190 @@ class MainActivity : Activity() {
             if (enabled) "Tracking protection enabled" else "Tracking protection disabled",
             Toast.LENGTH_SHORT
         ).show()
+    }
+
+    private fun permissionLabel(permission: Int): String = when (permission) {
+        GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> "Location"
+        GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> "Notifications"
+        GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE -> "Persistent storage"
+        GeckoSession.PermissionDelegate.PERMISSION_XR -> "Virtual reality (XR)"
+        GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE -> "Autoplay muted media"
+        GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> "Autoplay media with sound"
+        GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> "Protected media"
+        GeckoSession.PermissionDelegate.PERMISSION_TRACKING -> "Tracking protection exception"
+        GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS -> "Third-party storage access"
+        GeckoSession.PermissionDelegate.PERMISSION_LOCAL_DEVICE_ACCESS -> "Local device access"
+        GeckoSession.PermissionDelegate.PERMISSION_LOCAL_NETWORK_ACCESS -> "Local network access"
+        else -> "Website permission ($permission)"
+    }
+
+    private fun permissionValueLabel(value: Int): String = when (value) {
+        GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW -> "Allowed"
+        GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY -> "Blocked"
+        else -> "Ask each time"
+    }
+
+    private fun showSitePermissionsDialog() {
+        val rows = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val status = TextView(this).apply {
+            text = "Loading saved site permissions…"
+            textSize = 14f
+            setTextColor(secondaryText)
+            setPadding(dp(8), dp(12), dp(8), dp(16))
+        }
+        rows.addView(status)
+        val permissionRows = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        rows.addView(permissionRows)
+
+        val footer = TextView(this).apply {
+            text = "Camera and microphone requests are handled separately. Persistent-storage grants cannot be revoked through GeckoView."
+            textSize = 12f
+            setTextColor(secondaryText)
+            setPadding(dp(8), dp(12), dp(8), dp(8))
+        }
+        rows.addView(footer)
+
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(rows)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Site permissions")
+            .setView(scroll)
+            .setNegativeButton("Done", null)
+            .create()
+        dialog.show()
+
+        fun loadPermissions() {
+            status.text = "Loading saved site permissions…"
+            permissionRows.removeAllViews()
+            try {
+                runtime.storageController.getAllPermissions().accept(
+                    { savedPermissions ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed || !dialog.isShowing) return@runOnUiThread
+
+                            val entries = savedPermissions.orEmpty()
+                                .filter { it.value != GeckoSession.PermissionDelegate.ContentPermission.VALUE_PROMPT }
+                                .sortedWith(
+                                    compareBy<GeckoSession.PermissionDelegate.ContentPermission> {
+                                        Uri.parse(it.uri).host.orEmpty().lowercase()
+                                    }.thenBy { permissionLabel(it.permission) }
+                                )
+
+                            status.text = if (entries.isEmpty()) {
+                                "No saved site permissions yet. When a site permission is allowed or blocked, it will appear here."
+                            } else {
+                                "${entries.size} saved permission decision(s)"
+                            }
+
+                            entries.forEach { permission ->
+                                val site = Uri.parse(permission.uri).host
+                                    ?.removePrefix("www.")
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: permission.uri
+                                val persistentGrantCannotBeRevoked =
+                                    permission.permission == GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE &&
+                                        permission.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+
+                                val card = LinearLayout(this).apply {
+                                    orientation = LinearLayout.HORIZONTAL
+                                    gravity = Gravity.CENTER_VERTICAL
+                                    setPadding(dp(12), dp(10), dp(8), dp(10))
+                                    background = rounded(panelColor, 12)
+                                }
+                                val details = LinearLayout(this).apply {
+                                    orientation = LinearLayout.VERTICAL
+                                    setPadding(0, 0, dp(8), 0)
+                                }
+                                details.addView(TextView(this).apply {
+                                    text = site
+                                    textSize = 14f
+                                    maxLines = 2
+                                    setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+                                    setTextColor(primaryText)
+                                })
+                                details.addView(TextView(this).apply {
+                                    text = "${permissionLabel(permission.permission)} · ${permissionValueLabel(permission.value)}" +
+                                        if (permission.privateMode) " · Private session" else ""
+                                    textSize = 12f
+                                    setTextColor(secondaryText)
+                                    setPadding(0, dp(4), 0, 0)
+                                })
+                                card.addView(details, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+                                if (persistentGrantCannotBeRevoked) {
+                                    card.addView(TextView(this).apply {
+                                        text = "Cannot revoke"
+                                        textSize = 11f
+                                        setTextColor(secondaryText)
+                                        gravity = Gravity.CENTER
+                                    }, LinearLayout.LayoutParams(dp(92), LinearLayout.LayoutParams.WRAP_CONTENT))
+                                } else {
+                                    card.addView(smallButton(
+                                        "Reset",
+                                        accentColor,
+                                        Color.rgb(15, 18, 20)
+                                    ) {
+                                        AlertDialog.Builder(this)
+                                            .setTitle("Reset site permission?")
+                                            .setMessage(
+                                                "Reset ${permissionLabel(permission.permission).lowercase()} for $site to Ask? " +
+                                                    "The site will need to request this permission again."
+                                            )
+                                            .setNegativeButton("Cancel", null)
+                                            .setPositiveButton("Reset to Ask") { _, _ ->
+                                                try {
+                                                    runtime.storageController.setPermission(
+                                                        permission,
+                                                        GeckoSession.PermissionDelegate.ContentPermission.VALUE_PROMPT
+                                                    )
+                                                    Toast.makeText(
+                                                        this,
+                                                        "Permission reset to Ask",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    loadPermissions()
+                                                } catch (error: Exception) {
+                                                    Toast.makeText(
+                                                        this,
+                                                        "Could not reset permission: " +
+                                                            (error.localizedMessage ?: "unknown error"),
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
+                                            }
+                                            .show()
+                                    }, LinearLayout.LayoutParams(dp(88), dp(44)))
+                                }
+
+                                permissionRows.addView(card, LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT
+                                ).apply { bottomMargin = dp(8) })
+                            }
+                        }
+                    },
+                    { error ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed || !dialog.isShowing) return@runOnUiThread
+                            status.text = "Could not load site permissions: " +
+                                (error?.localizedMessage ?: "unknown error")
+                        }
+                    }
+                )
+            } catch (error: Exception) {
+                status.text = "Could not load site permissions: " +
+                    (error.localizedMessage ?: "unknown error")
+            }
+        }
+
+        loadPermissions()
     }
 
     private fun showPrivacyInfo() {
