@@ -1365,48 +1365,128 @@ class MainActivity : Activity() {
             return
         }
 
+        var cancelled = false
         val loading = AlertDialog.Builder(this)
             .setTitle("Reader mode")
-            .setMessage("Extracting readable page content…")
+            .setMessage("Checking for an article…")
             .setNegativeButton("Cancel", null)
             .create()
+        loading.setOnShowListener {
+            loading.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+                cancelled = true
+                loading.dismiss()
+            }
+        }
         loading.show()
 
+        val extractor = tab.session.sessionPageExtractor
+
+        fun finishLoading() {
+            if (loading.isShowing) loading.dismiss()
+        }
+
         try {
-            tab.session.sessionPageExtractor
-                .getPageContent(PageExtractionController.ContentParams(true))
-                .accept(
-                    { extracted ->
-                        runOnUiThread {
-                            if (isFinishing || isDestroyed) return@runOnUiThread
-                            loading.dismiss()
-                            val text = extracted.toString().trim()
-                            if (text.isBlank()) {
-                                Toast.makeText(this, "No readable text was found on this page", Toast.LENGTH_LONG).show()
-                                return@runOnUiThread
-                            }
-                            showReaderContent(tab.title?.takeIf { it.isNotBlank() } ?: sourceUrl, sourceUrl, text)
+            extractor.getPageMetadata().accept(
+                { metadata ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || cancelled) {
+                            finishLoading()
+                            return@runOnUiThread
                         }
-                    },
-                    { error ->
-                        runOnUiThread {
-                            if (isFinishing || isDestroyed) return@runOnUiThread
-                            loading.dismiss()
+
+                        if (!metadata.isReaderable) {
+                            finishLoading()
                             Toast.makeText(
                                 this,
-                                "Reader mode couldn't extract this page: ${error?.localizedMessage ?: "unsupported page"}",
+                                "No main article was detected. Open a specific article and try Reader mode again.",
                                 Toast.LENGTH_LONG
                             ).show()
+                            return@runOnUiThread
+                        }
+
+                        loading.setMessage("Extracting article text…")
+                        try {
+                            extractor.getPageContent(
+                                PageExtractionController.ContentParams(true, true)
+                            ).accept(
+                                { extracted ->
+                                    runOnUiThread {
+                                        if (isFinishing || isDestroyed || cancelled) {
+                                            finishLoading()
+                                            return@runOnUiThread
+                                        }
+                                        finishLoading()
+                                        val text = extracted.trim()
+                                        if (text.isBlank()) {
+                                            Toast.makeText(
+                                                this,
+                                                "No readable text was found on this page",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            return@runOnUiThread
+                                        }
+                                        showReaderContent(
+                                            tab.title?.takeIf { it.isNotBlank() } ?: sourceUrl,
+                                            sourceUrl,
+                                            text
+                                        )
+                                    }
+                                },
+                                { error ->
+                                    runOnUiThread {
+                                        if (isFinishing || isDestroyed || cancelled) {
+                                            finishLoading()
+                                            return@runOnUiThread
+                                        }
+                                        finishLoading()
+                                        Toast.makeText(
+                                            this,
+                                            "Reader mode couldn't extract this page: " +
+                                                (error?.localizedMessage ?: "unsupported page"),
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            )
+                        } catch (error: Exception) {
+                            finishLoading()
+                            if (!cancelled) {
+                                Toast.makeText(
+                                    this,
+                                    "Reader mode unavailable: " +
+                                        (error.localizedMessage ?: "unsupported page"),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
                         }
                     }
-                )
+                },
+                { error ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || cancelled) {
+                            finishLoading()
+                            return@runOnUiThread
+                        }
+                        finishLoading()
+                        Toast.makeText(
+                            this,
+                            "Reader mode couldn't identify the article: " +
+                                (error?.localizedMessage ?: "unknown error"),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            )
         } catch (error: Exception) {
-            loading.dismiss()
-            Toast.makeText(
-                this,
-                "Reader mode unavailable: ${error.localizedMessage ?: "unsupported page"}",
-                Toast.LENGTH_LONG
-            ).show()
+            finishLoading()
+            if (!cancelled) {
+                Toast.makeText(
+                    this,
+                    "Reader mode unavailable: " +
+                        (error.localizedMessage ?: "unsupported page"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
