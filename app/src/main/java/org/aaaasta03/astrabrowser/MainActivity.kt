@@ -2939,6 +2939,10 @@ class MainActivity : Activity() {
                     recordHistory(url, session)
                     persistOpenTabsIfReady()
                 }
+
+                if (tabs.getOrNull(currentTabIndex) === tab) {
+                    applyVideoPlaybackSpeed()
+                }
             }
 
             override fun onNewSession(
