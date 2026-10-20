@@ -2,6 +2,7 @@ package org.aaaasta03.astrabrowser
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
 import android.app.PictureInPictureParams
 import android.content.pm.ActivityInfo
 import android.content.res.ColorStateList
@@ -491,20 +492,192 @@ class VideoPlayerActivity : Activity() {
     }
 
     private fun showVideoSettings() {
-        AlertDialog.Builder(this)
-            .setTitle("Astra video settings")
-            .setItems(arrayOf("Video quality", "Audio track", "Subtitles / captions", "Playback speed", "Video fit", "Playback information")) { _, which ->
-                when (which) {
-                    0 -> showTrackSelection("Video quality", C.TRACK_TYPE_VIDEO, adaptive = true)
-                    1 -> showTrackSelection("Audio track", C.TRACK_TYPE_AUDIO)
-                    2 -> showTrackSelection("Subtitles / captions", C.TRACK_TYPE_TEXT)
-                    3 -> showPlaybackSpeed()
-                    4 -> showVideoFit()
-                    5 -> showPlaybackInformation()
+        val activePlayer = player
+        val trackGroups = activePlayer?.currentTracks?.groups.orEmpty()
+        val speedValue = activePlayer?.playbackParameters?.speed ?: 1f
+        val speedLabel = speedValue.toString().removeSuffix(".0")
+        val fitIndex = preferences.getInt("native_video_fit_mode", 0).coerceIn(0, resizeLabels.lastIndex)
+        val videoFormat = activePlayer?.videoFormat
+        val resolutionLabel = if (videoFormat != null && videoFormat.width > 0 && videoFormat.height > 0) {
+            "${videoFormat.width} × ${videoFormat.height}"
+        } else {
+            "Resolution not reported"
+        }
+
+        val dialog = Dialog(this)
+        val sheet = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(9), dp(18), dp(20))
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(24, 24, 31))
+                cornerRadius = dp(24).toFloat()
+                setStroke(dp(1), 0x44FFFFFF)
+            }
+        }
+
+        val handle = View(this).apply {
+            background = GradientDrawable().apply {
+                setColor(0x66FFFFFF)
+                cornerRadius = dp(3).toFloat()
+            }
+        }
+        sheet.addView(handle, LinearLayout.LayoutParams(dp(42), dp(4)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(16)
+        })
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val headerText = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        headerText.addView(TextView(this).apply {
+            text = "Astra video settings"
+            textSize = 20f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setTextColor(Color.WHITE)
+        })
+        headerText.addView(TextView(this).apply {
+            text = titleLabel.text.toString().ifBlank { "Now playing" }
+            textSize = 12f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextColor(0xFFB8B8C5.toInt())
+        })
+        header.addView(headerText, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(controlButton("×", "Close video settings", 24f) {
+            dialog.dismiss()
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        sheet.addView(header, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(14)
+        })
+
+        val rows = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        fun addSection(label: String) {
+            rows.addView(TextView(this).apply {
+                text = label.uppercase(java.util.Locale.ROOT)
+                textSize = 11f
+                letterSpacing = 0.08f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(0xFFB9A7FF.toInt())
+                setPadding(dp(4), dp(10), dp(4), dp(8))
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+        fun addRow(icon: String, title: String, detail: String, action: () -> Unit) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(68)
+                setPadding(dp(10), dp(7), dp(10), dp(7))
+                isClickable = true
+                isFocusable = true
+                background = GradientDrawable().apply {
+                    setColor(0xFF292933.toInt())
+                    cornerRadius = dp(15).toFloat()
+                    setStroke(dp(1), 0x20FFFFFF)
+                }
+                setOnClickListener {
+                    dialog.dismiss()
+                    action()
                 }
             }
-            .setNegativeButton("Close", null)
-            .show()
+            row.addView(TextView(this).apply {
+                text = icon
+                textSize = 19f
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(42), dp(48)))
+            val labels = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(7), dp(2), dp(5), dp(2))
+            }
+            labels.addView(TextView(this).apply {
+                text = title
+                textSize = 14f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(Color.WHITE)
+            })
+            labels.addView(TextView(this).apply {
+                text = detail
+                textSize = 11f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setTextColor(0xFFB8B8C5.toInt())
+            })
+            row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(TextView(this).apply {
+                text = "›"
+                textSize = 25f
+                gravity = Gravity.CENTER
+                setTextColor(0xFFB9A7FF.toInt())
+            }, LinearLayout.LayoutParams(dp(28), dp(48)))
+            rows.addView(row, LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(7)
+            })
+        }
+
+        addSection("Playback")
+        addRow(
+            "▣",
+            "Video quality",
+            if (trackGroups.any { it.type == C.TRACK_TYPE_VIDEO }) "Current: $resolutionLabel · choose available tracks" else "No selectable quality tracks detected"
+        ) { showTrackSelection("Video quality", C.TRACK_TYPE_VIDEO, adaptive = true) }
+        addRow(
+            "1×",
+            "Playback speed",
+            "Currently $speedLabel× · tap to change speed"
+        ) { showPlaybackSpeed() }
+        addRow(
+            "▧",
+            "Video scaling",
+            "Current mode: ${resizeLabels[fitIndex]}"
+        ) { showVideoFit() }
+
+        addSection("Audio and accessibility")
+        addRow(
+            "♫",
+            "Audio track",
+            if (trackGroups.any { it.type == C.TRACK_TYPE_AUDIO }) "Choose an available audio track" else "No selectable alternate audio tracks detected"
+        ) { showTrackSelection("Audio track", C.TRACK_TYPE_AUDIO) }
+        addRow(
+            "CC",
+            "Subtitles and captions",
+            if (trackGroups.any { it.type == C.TRACK_TYPE_TEXT }) "Choose captions or a subtitle track" else "No selectable subtitle tracks detected"
+        ) { showTrackSelection("Subtitles / captions", C.TRACK_TYPE_TEXT) }
+
+        addSection("Diagnostics")
+        addRow(
+            "ⓘ",
+            "Playback information",
+            "Position, duration, resolution and audio details"
+        ) { showPlaybackInformation() }
+
+        val scroll = android.widget.ScrollView(this).apply {
+            isFillViewport = false
+            clipToPadding = false
+            addView(rows, android.widget.ScrollView.LayoutParams(-1, -2))
+        }
+        val maxScrollHeight = minOf(dp(420), (resources.displayMetrics.heightPixels * 0.62f).toInt())
+        sheet.addView(scroll, LinearLayout.LayoutParams(-1, maxScrollHeight))
+
+        dialog.setContentView(sheet)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.let { window ->
+            window.setBackgroundDrawableResource(android.R.color.transparent)
+            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            val params = window.attributes
+            params.width = WindowManager.LayoutParams.MATCH_PARENT
+            params.height = WindowManager.LayoutParams.WRAP_CONTENT
+            params.gravity = Gravity.BOTTOM
+            params.dimAmount = 0.58f
+            window.attributes = params
+        }
+        dialog.show()
+        dialog.window?.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT)
     }
 
     private fun showPlaybackInformation() {
