@@ -3443,22 +3443,35 @@ class MainActivity : Activity() {
 
     private fun setVideoFullScreen(enabled: Boolean) {
         videoFullScreen = enabled
+
+        // Keep Astra's bottom navigation visible to match the in-browser video layout.
+        // Only the address/top bar is hidden; site-owned controls (for example YouTube's
+        // playback, captions, and settings buttons) remain part of the webpage player.
         browserTopBar.visibility = if (enabled) View.GONE else View.VISIBLE
         menuScrim.visibility = View.GONE
         menuPanel.visibility = View.GONE
         menuOpen = false
+
         if (enabled) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                )
-            if (browserPrefs.getBoolean("video_auto_landscape", true)) {
-                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            val immersive = browserPrefs.getBoolean("video_immersive_fullscreen", true)
+            if (immersive) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                window.decorView.systemUiVisibility =
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                window.decorView.systemUiVisibility = 0
+            }
+
+            requestedOrientation = if (browserPrefs.getBoolean("video_auto_landscape", true)) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
