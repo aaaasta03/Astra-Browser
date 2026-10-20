@@ -30,6 +30,8 @@ import android.widget.TextView
 import android.widget.Toast
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
+import android.content.pm.ActivityInfo
+import android.view.WindowManager
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
@@ -58,6 +60,8 @@ class MainActivity : Activity() {
     private lateinit var addressBar: EditText
     private lateinit var tabCountButton: TextView
     private lateinit var reloadButton: TextView
+    private lateinit var browserTopBar: View
+    private var videoFullScreen = false
 
     private data class BrowserTab(
         val session: GeckoSession,
@@ -151,7 +155,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(pageBackground)
         }
-        column.addView(buildTopBar(), LinearLayout.LayoutParams(
+        browserTopBar = buildTopBar()
+        column.addView(browserTopBar, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(64)
         ))
 
@@ -512,6 +517,9 @@ class MainActivity : Activity() {
         })
         menu.addView(menuItem("Homepage", "Choose the page opened in new tabs") {
             showHomepageDialog()
+        })
+        menu.addView(menuItem("Video settings", "Playback speed and full-screen behavior") {
+            showVideoSettingsDialog()
         })
 
         menu.addView(sectionLabel("PRIVACY & TOOLS"), menuLabelParams().apply {
@@ -2884,6 +2892,10 @@ class MainActivity : Activity() {
         }
 
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                if (session === currentTab.session) setVideoFullScreen(fullScreen)
+            }
+
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 val privateMode = tabs.firstOrNull { it.session === session }?.isPrivateMode ?: true
                 handleExternalResponse(response, privateMode)
@@ -3386,8 +3398,81 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    private fun setVideoFullScreen(enabled: Boolean) {
+        videoFullScreen = enabled
+        browserTopBar.visibility = if (enabled) View.GONE else View.VISIBLE
+        menuScrim.visibility = View.GONE
+        menuPanel.visibility = View.GONE
+        menuOpen = false
+        if (enabled) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                )
+            if (browserPrefs.getBoolean("video_auto_landscape", true)) {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            window.decorView.systemUiVisibility = 0
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    private fun showVideoSettingsDialog() {
+        val speeds = arrayOf("0.5×", "0.75×", "Normal (1×)", "1.25×", "1.5×", "1.75×", "2×")
+        val values = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+        val currentSpeed = browserPrefs.getFloat("video_playback_speed", 1f)
+        val selected = values.indices.minByOrNull { kotlin.math.abs(values[it] - currentSpeed) } ?: 2
+        val items = arrayOf(
+            "Playback speed",
+            "Auto-rotate video to landscape",
+            "Use immersive full-screen"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Video settings")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> AlertDialog.Builder(this)
+                        .setTitle("Default playback speed")
+                        .setSingleChoiceItems(speeds, selected) { dialog, index ->
+                            browserPrefs.edit().putFloat("video_playback_speed", values[index]).apply()
+                            applyVideoPlaybackSpeed(values[index])
+                            Toast.makeText(this, "Default speed: ${speeds[index]}", Toast.LENGTH_SHORT).show()
+                            dialog.dismiss()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                    1 -> {
+                        val enabled = !browserPrefs.getBoolean("video_auto_landscape", true)
+                        browserPrefs.edit().putBoolean("video_auto_landscape", enabled).apply()
+                        Toast.makeText(this, "Auto landscape ${if (enabled) "enabled" else "disabled"}", Toast.LENGTH_SHORT).show()
+                    }
+                    2 -> {
+                        val enabled = !browserPrefs.getBoolean("video_immersive_fullscreen", true)
+                        browserPrefs.edit().putBoolean("video_immersive_fullscreen", enabled).apply()
+                        Toast.makeText(this, "Immersive full-screen ${if (enabled) "enabled" else "disabled"}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun applyVideoPlaybackSpeed(speed: Float = browserPrefs.getFloat("video_playback_speed", 1f)) {
+        if (!::geckoView.isInitialized || currentTab.isHome) return
+        val script = "(function(){document.querySelectorAll('video').forEach(function(v){v.playbackRate=$speed;});return true;})()"
+        currentTab.session.evaluateJS(script)
+    }
+
     override fun onBackPressed() {
         when {
+            videoFullScreen -> currentTab.session.exitFullScreen()
             menuOpen -> closeMenu()
             !currentTab.isHome -> currentTab.session.goBack()
             else -> super.onBackPressed()
@@ -3398,6 +3483,7 @@ class MainActivity : Activity() {
         pendingAndroidPermissionCallback?.reject()
         pendingAndroidPermissionCallback = null
         pendingAndroidPermissions = emptyArray()
+        if (videoFullScreen) setVideoFullScreen(false)
         persistOpenTabsIfReady()
         clearPrivateDownloads()
         tabs.forEach { tab -> tab.session.close() }
