@@ -99,6 +99,7 @@ class MainActivity : Activity() {
     private val importBookmarksRequestCode = 4183
     private val exportBookmarksRequestCode = 4184
     private val deniedDevicePermissionsPreference = "denied_device_permissions"
+    private val mediaSitePermissionPrefix = "site_media_permission:"
     private var pendingAndroidPermissionCallback: GeckoSession.PermissionDelegate.Callback? = null
     private var pendingAndroidPermissions: Array<String> = emptyArray()
     private var trackingProtectionMenuItem: View? = null
@@ -112,6 +113,13 @@ class MainActivity : Activity() {
 
     private data class ClosedTab(val url: String, val title: String?, val isDesktopMode: Boolean)
     private val recentlyClosedTabs = mutableListOf<ClosedTab>()
+
+    private data class SavedMediaPermission(
+        val key: String,
+        val origin: String,
+        val type: String,
+        val decision: String
+    )
 
     private data class Bookmark(
         var title: String,
@@ -809,7 +817,7 @@ class MainActivity : Activity() {
         rows.addView(permissionRows)
 
         val footer = TextView(this).apply {
-            text = "Camera and microphone requests are handled separately. Persistent-storage grants cannot be revoked through GeckoView."
+            text = "Camera and microphone choices are saved per site and can be reset to Ask. Private sessions do not save media choices. Persistent-storage grants cannot be revoked through GeckoView."
             textSize = 12f
             setTextColor(secondaryText)
             setPadding(dp(8), dp(12), dp(8), dp(8))
@@ -857,10 +865,12 @@ class MainActivity : Activity() {
                                     }.thenBy { permissionLabel(it.permission) }
                                 )
 
-                            status.text = if (entries.isEmpty()) {
+                            val mediaEntries = savedMediaPermissionDecisions()
+                            val totalEntries = entries.size + mediaEntries.size
+                            status.text = if (totalEntries == 0) {
                                 "No saved site permissions yet. When a site permission is allowed or blocked, it will appear here."
                             } else {
-                                "${entries.size} saved permission decision(s)"
+                                "${totalEntries} saved permission decision(s)"
                             }
 
                             entries.forEach { permission ->
@@ -948,6 +958,50 @@ class MainActivity : Activity() {
                                     LinearLayout.LayoutParams.WRAP_CONTENT
                                 ).apply { bottomMargin = dp(8) })
                             }
+
+                            mediaEntries.forEach { saved ->
+                                val site = permissionOrigin(saved.origin)
+                                val card = LinearLayout(this).apply {
+                                    orientation = LinearLayout.HORIZONTAL
+                                    gravity = Gravity.CENTER_VERTICAL
+                                    setPadding(dp(12), dp(10), dp(8), dp(10))
+                                    background = rounded(panelColor, 12)
+                                }
+                                val details = LinearLayout(this).apply {
+                                    orientation = LinearLayout.VERTICAL
+                                    setPadding(0, 0, dp(8), 0)
+                                }
+                                details.addView(TextView(this).apply {
+                                    text = site
+                                    textSize = 14f
+                                    maxLines = 2
+                                    setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+                                    setTextColor(primaryText)
+                                })
+                                details.addView(TextView(this).apply {
+                                    text = "${saved.type.replaceFirstChar { it.uppercase() }} · ${if (saved.decision == "allow") "Allowed" else "Blocked"}"
+                                    textSize = 12f
+                                    setTextColor(secondaryText)
+                                    setPadding(0, dp(4), 0, 0)
+                                })
+                                card.addView(details, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                                card.addView(smallButton("Reset", accentColor, Color.rgb(15, 18, 20)) {
+                                    AlertDialog.Builder(this)
+                                        .setTitle("Reset site permission?")
+                                        .setMessage("Reset ${saved.type} for $site to Ask? The site will need to request access again.")
+                                        .setNegativeButton("Cancel", null)
+                                        .setPositiveButton("Reset to Ask") { _, _ ->
+                                            browserPrefs.edit().remove(saved.key).apply()
+                                            Toast.makeText(this, "Permission reset to Ask", Toast.LENGTH_SHORT).show()
+                                            loadPermissions()
+                                        }
+                                        .show()
+                                }, LinearLayout.LayoutParams(dp(88), dp(44)))
+                                permissionRows.addView(card, LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT
+                                ).apply { bottomMargin = dp(8) })
+                            }
                         }
                     },
                     { error ->
@@ -1026,6 +1080,7 @@ class MainActivity : Activity() {
 
         history.clear()
         persistHistory()
+        clearSavedMediaPermissions()
         showingHome = true
         homeView.visibility = View.VISIBLE
         geckoView.visibility = View.GONE
@@ -2460,6 +2515,52 @@ class MainActivity : Activity() {
     private fun permissionOrigin(uri: String): String =
         Uri.parse(uri).host?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: "This website"
 
+    private fun normalizedSiteOrigin(uri: String): String? {
+        val parsed = Uri.parse(uri)
+        val scheme = parsed.scheme?.lowercase()
+        val host = parsed.host?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+        if (scheme != "https" && scheme != "http") return null
+        val port = parsed.port.takeIf {
+            it > 0 && !((scheme == "https" && it == 443) || (scheme == "http" && it == 80))
+        }
+        return "$scheme://$host" + (port?.let { ":$it" } ?: "")
+    }
+
+    private fun mediaSitePermissionKey(origin: String, type: String): String =
+        "$mediaSitePermissionPrefix$type|$origin"
+
+    private fun getMediaSitePermission(origin: String, type: String): String? =
+        browserPrefs.getString(mediaSitePermissionKey(origin, type), null)
+            ?.takeIf { it == "allow" || it == "block" }
+
+    private fun saveMediaSitePermission(origin: String, type: String, decision: String) {
+        if (decision != "allow" && decision != "block") return
+        browserPrefs.edit().putString(mediaSitePermissionKey(origin, type), decision).apply()
+    }
+
+    private fun savedMediaPermissionDecisions(): List<SavedMediaPermission> =
+        browserPrefs.all.entries.mapNotNull { entry ->
+            val key = entry.key
+            if (!key.startsWith(mediaSitePermissionPrefix)) return@mapNotNull null
+            val decision = entry.value as? String ?: return@mapNotNull null
+            if (decision != "allow" && decision != "block") return@mapNotNull null
+            val suffix = key.removePrefix(mediaSitePermissionPrefix)
+            val separator = suffix.indexOf('|')
+            if (separator <= 0 || separator == suffix.lastIndex) return@mapNotNull null
+            val type = suffix.substring(0, separator)
+            val origin = suffix.substring(separator + 1)
+            if (type != "camera" && type != "microphone") return@mapNotNull null
+            if (normalizedSiteOrigin(origin) != origin) return@mapNotNull null
+            SavedMediaPermission(key, origin, type, decision)
+        }.sortedWith(compareBy<SavedMediaPermission> { it.origin }.thenBy { it.type })
+
+    private fun clearSavedMediaPermissions() {
+        val editor = browserPrefs.edit()
+        browserPrefs.all.keys.filter { it.startsWith(mediaSitePermissionPrefix) }
+            .forEach { editor.remove(it) }
+        editor.apply()
+    }
+
     private fun isLocationPermission(permission: String): Boolean =
         permission == Manifest.permission.ACCESS_COARSE_LOCATION ||
             permission == Manifest.permission.ACCESS_FINE_LOCATION
@@ -2696,6 +2797,7 @@ class MainActivity : Activity() {
     }
 
     private fun handleMediaPermissionRequest(
+        session: GeckoSession,
         uri: String,
         video: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
         audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
@@ -2712,25 +2814,62 @@ class MainActivity : Activity() {
             return
         }
 
-        val requestedDevices = buildList {
+        val origin = normalizedSiteOrigin(uri)
+        if (origin == null) {
+            callback.reject()
+            return
+        }
+
+        val isPrivateSession = tabs.firstOrNull { it.session === session }?.isPrivateMode != false
+        val requestedTypes = buildList {
             if (wantsCamera) add("camera")
             if (wantsMicrophone) add("microphone")
-        }.joinToString(" and ")
-        val origin = permissionOrigin(uri)
+        }
+        val savedDecisions = requestedTypes.associateWith { type ->
+            if (isPrivateSession) null else getMediaSitePermission(origin, type)
+        }
+
+        if (savedDecisions.values.any { it == "block" }) {
+            Toast.makeText(this, "Camera or microphone access is blocked for this site in Astra", Toast.LENGTH_SHORT).show()
+            callback.reject()
+            return
+        }
+
+        fun grantRequestedDevices() {
+            val selectedVideo = if (wantsCamera) video?.firstOrNull() else null
+            val selectedAudio = if (wantsMicrophone) audio?.firstOrNull() else null
+            if ((wantsCamera && selectedVideo == null) ||
+                (wantsMicrophone && selectedAudio == null)
+            ) {
+                callback.reject()
+            } else {
+                callback.grant(selectedVideo?.id, selectedAudio?.id)
+            }
+        }
+
+        if (savedDecisions.isNotEmpty() && savedDecisions.values.all { it == "allow" }) {
+            grantRequestedDevices()
+            return
+        }
+
+        val requestedDevices = requestedTypes.joinToString(" and ")
         val dialog = AlertDialog.Builder(this)
             .setTitle("Allow $origin to use $requestedDevices?")
             .setMessage(
-                "Astra will provide only the requested device source for this request. " +
-                    "Block access if you do not trust this site."
+                "Allow saves this choice for this website in Astra. Block remembers the denial. " +
+                    "You can reset either choice to Ask in Site permissions. Android device permission is also required."
             )
-            .setNegativeButton("Block") { _, _ -> callback.reject() }
+            .setNegativeButton("Block") { _, _ ->
+                if (!isPrivateSession) {
+                    requestedTypes.forEach { type -> saveMediaSitePermission(origin, type, "block") }
+                }
+                callback.reject()
+            }
             .setPositiveButton("Allow") { _, _ ->
-                val selectedVideo = if (wantsCamera) video?.firstOrNull() else null
-                val selectedAudio = if (wantsMicrophone) audio?.firstOrNull() else null
-                if ((wantsCamera && selectedVideo == null) ||
-                    (wantsMicrophone && selectedAudio == null)
-                ) callback.reject()
-                else callback.grant(selectedVideo?.id, selectedAudio?.id)
+                if (!isPrivateSession) {
+                    requestedTypes.forEach { type -> saveMediaSitePermission(origin, type, "allow") }
+                }
+                grantRequestedDevices()
             }
             .create()
         dialog.setOnCancelListener { callback.reject() }
@@ -2760,7 +2899,7 @@ class MainActivity : Activity() {
                 audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
                 callback: GeckoSession.PermissionDelegate.MediaCallback
             ) {
-                handleMediaPermissionRequest(uri, video, audio, callback)
+                handleMediaPermissionRequest(session, uri, video, audio, callback)
             }
         }
 
