@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Rational
 import android.view.Gravity
 import android.view.View
@@ -34,6 +35,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Astra's native player for downloaded files and compatible direct media sources.
@@ -59,6 +61,7 @@ class VideoPlayerActivity : Activity() {
     private var enteringPictureInPicture = false
     private var lifecyclePausedPlayback = false
     private var lifecyclePauseWasPlaying = false
+    private var lastAudibleVolume = 1f
     private val handler = Handler(Looper.getMainLooper())
     private val preferences by lazy {
         getSharedPreferences("astra_browser_library", MODE_PRIVATE)
@@ -88,6 +91,9 @@ class VideoPlayerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (preferences.contains("native_video_brightness_percent")) {
+            applyPlayerBrightness(preferences.getInt("native_video_brightness_percent", 70), persist = false)
+        }
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         enterImmersiveMode()
 
@@ -140,6 +146,11 @@ class VideoPlayerActivity : Activity() {
                 androidx.media3.common.MediaMetadata.Builder().setTitle(title).build()
             )
             .build()
+        val initialVolumePercent = preferences.getInt("native_video_volume_percent", 100).coerceIn(0, 100)
+        lastAudibleVolume = preferences.getFloat(
+            "native_video_last_audible_volume",
+            if (initialVolumePercent > 0) initialVolumePercent / 100f else 1f
+        ).coerceIn(0.01f, 1f)
 
         player = ExoPlayer.Builder(this)
             .setSeekBackIncrementMs(10_000L)
@@ -172,6 +183,7 @@ class VideoPlayerActivity : Activity() {
                     }
                 })
                 exo.setPlaybackSpeed(preferences.getFloat("video_playback_speed", 1f).coerceIn(0.5f, 2f))
+                exo.volume = initialVolumePercent / 100f
                 exo.setMediaItem(mediaItem)
                 exo.playWhenReady = true
                 exo.prepare()
@@ -219,8 +231,14 @@ class VideoPlayerActivity : Activity() {
                 toggleOrientation()
             }, LinearLayout.LayoutParams(dp(48), dp(48)))
             muteButton = controlButton("🔊", "Mute audio", 19f) {
-                player?.let { it.volume = if (it.volume > 0f) 0f else 1f }
-                updateMuteButton()
+                player?.let {
+                    if (it.volume > 0f) {
+                        lastAudibleVolume = it.volume
+                        applyMediaVolumePercent(0)
+                    } else {
+                        applyMediaVolumePercent((lastAudibleVolume * 100f).roundToInt().coerceIn(1, 100))
+                    }
+                }
             }
             top.addView(muteButton, LinearLayout.LayoutParams(dp(48), dp(48)))
             top.addView(controlButton("▣", "Picture in Picture", 20f) {
@@ -387,6 +405,36 @@ class VideoPlayerActivity : Activity() {
         val playing = player?.isPlaying == true
         playPauseButton.text = if (playing) "Ⅱ" else "▶"
         playPauseButton.contentDescription = if (playing) "Pause" else "Play"
+    }
+
+    private fun getSystemBrightnessPercent(): Int = runCatching {
+        val level = Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 180)
+        (level * 100f / 255f).roundToInt().coerceIn(0, 100)
+    }.getOrDefault(70)
+
+    /** Applies brightness to this Activity window only; system brightness is never written. */
+    private fun applyPlayerBrightness(percent: Int, persist: Boolean = true) {
+        val normalized = percent.coerceIn(0, 100)
+        val params = window.attributes
+        params.screenBrightness = normalized / 100f
+        window.attributes = params
+        if (persist) {
+            preferences.edit().putInt("native_video_brightness_percent", normalized).apply()
+        }
+    }
+
+    private fun applyMediaVolumePercent(percent: Int, persist: Boolean = true) {
+        val normalized = percent.coerceIn(0, 100)
+        val volume = normalized / 100f
+        player?.volume = volume
+        if (volume > 0f) lastAudibleVolume = volume
+        if (persist) {
+            preferences.edit().apply {
+                putInt("native_video_volume_percent", normalized)
+                if (volume > 0f) putFloat("native_video_last_audible_volume", volume)
+            }.apply()
+        }
+        updateMuteButton()
     }
 
     private fun updateMuteButton() {
@@ -619,6 +667,102 @@ class VideoPlayerActivity : Activity() {
                 bottomMargin = dp(7)
             })
         }
+
+        fun addSliderControl(
+            icon: String,
+            title: String,
+            detail: String,
+            initialValue: Int,
+            onChanged: (Int) -> Unit
+        ) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(7))
+                background = GradientDrawable().apply {
+                    setColor(0xFF292933.toInt())
+                    cornerRadius = dp(15).toFloat()
+                    setStroke(dp(1), 0x20FFFFFF)
+                }
+            }
+            val heading = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            heading.addView(TextView(this).apply {
+                text = icon
+                textSize = 21f
+                gravity = Gravity.CENTER
+                setTextColor(0xFFB9A7FF.toInt())
+            }, LinearLayout.LayoutParams(dp(38), dp(38)))
+            val labelColumn = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(6), 0, dp(4), 0)
+            }
+            labelColumn.addView(TextView(this).apply {
+                text = title
+                textSize = 14f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(Color.WHITE)
+            })
+            labelColumn.addView(TextView(this).apply {
+                text = detail
+                textSize = 11f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setTextColor(0xFFB8B8C5.toInt())
+            })
+            heading.addView(labelColumn, LinearLayout.LayoutParams(0, -2, 1f))
+            val valueLabel = TextView(this).apply {
+                text = "$initialValue%"
+                textSize = 14f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+            }
+            heading.addView(valueLabel, LinearLayout.LayoutParams(dp(48), dp(38)))
+            card.addView(heading, LinearLayout.LayoutParams(-1, -2))
+
+            val slider = SeekBar(this).apply {
+                max = 100
+                progress = initialValue.coerceIn(0, 100)
+                progressTintList = ColorStateList.valueOf(0xFFB9A7FF.toInt())
+                thumbTintList = ColorStateList.valueOf(Color.WHITE)
+                progressBackgroundTintList = ColorStateList.valueOf(0x66FFFFFF)
+                setPadding(dp(3), 0, dp(3), 0)
+                contentDescription = "$title percentage"
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        valueLabel.text = "$progress%"
+                        if (fromUser) onChanged(progress)
+                    }
+                    override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+                })
+            }
+            card.addView(slider, LinearLayout.LayoutParams(-1, dp(38)))
+            rows.addView(card, LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(8)
+            })
+        }
+
+        addSection("Display & sound")
+        val initialBrightnessPercent = preferences.getInt(
+            "native_video_brightness_percent",
+            getSystemBrightnessPercent()
+        ).coerceIn(0, 100)
+        val initialVolumePercent = preferences.getInt("native_video_volume_percent", 100).coerceIn(0, 100)
+        addSliderControl(
+            "☼",
+            "Screen brightness",
+            "Only changes brightness in Astra's video player",
+            initialBrightnessPercent
+        ) { percent -> applyPlayerBrightness(percent) }
+        addSliderControl(
+            "♫",
+            "Media volume",
+            "Adjust this video's audio from 0% to 100%",
+            initialVolumePercent
+        ) { percent -> applyMediaVolumePercent(percent) }
 
         addSection("Playback")
         addRow(
