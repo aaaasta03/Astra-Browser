@@ -659,7 +659,7 @@ class VideoPlayerActivity : Activity() {
         val scroll = android.widget.ScrollView(this).apply {
             isFillViewport = false
             clipToPadding = false
-            addView(rows, android.widget.ScrollView.LayoutParams(-1, -2))
+            addView(rows, FrameLayout.LayoutParams(-1, -2))
         }
         val maxScrollHeight = minOf(dp(420), (resources.displayMetrics.heightPixels * 0.62f).toInt())
         sheet.addView(scroll, LinearLayout.LayoutParams(-1, maxScrollHeight))
