@@ -128,7 +128,7 @@ class MainActivity : Activity() {
         var isFavorite: Boolean = false
     )
 
-    private data class DownloadItem(val name: String, val bytes: Long, val completedAt: Long)
+    private data class DownloadItem(val name: String, val bytes: Long, val completedAt: Long, val isPrivateMode: Boolean = false)
     private val downloads = mutableListOf<DownloadItem>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -219,6 +219,7 @@ class MainActivity : Activity() {
         setContentView(root)
 
         homeSearch.hint = "Search with ${selectedSearchEngine.label}"
+        clearStalePrivateDownloadFiles()
         loadBrowserLibrary()
 
         runtime = GeckoRuntime.create(
@@ -1081,6 +1082,7 @@ class MainActivity : Activity() {
         history.clear()
         persistHistory()
         clearSavedMediaPermissions()
+        clearPrivateDownloads()
         showingHome = true
         homeView.visibility = View.VISIBLE
         geckoView.visibility = View.GONE
@@ -1270,7 +1272,7 @@ class MainActivity : Activity() {
 
     private fun persistDownloads() {
         val data = JSONArray()
-        downloads.forEach { item ->
+        downloads.filter { PrivateBrowsingPolicy.shouldPersistDownload(it.isPrivateMode) }.forEach { item ->
             data.put(JSONObject()
                 .put("name", item.name)
                 .put("bytes", item.bytes)
@@ -1279,8 +1281,17 @@ class MainActivity : Activity() {
         browserPrefs.edit().putString("downloads", data.toString()).apply()
     }
 
-    private fun downloadDirectory(): File =
-        File(filesDir, "downloads").apply { if (!exists()) mkdirs() }
+    private fun downloadDirectory(privateMode: Boolean = false): File =
+        File(filesDir, if (privateMode) "private_downloads" else "downloads").apply { if (!exists()) mkdirs() }
+
+    private fun clearStalePrivateDownloadFiles() {
+        File(filesDir, "private_downloads").deleteRecursively()
+    }
+
+    private fun clearPrivateDownloads() {
+        downloads.removeAll { it.isPrivateMode }
+        Thread({ File(filesDir, "private_downloads").deleteRecursively() }, "AstraPrivateDownloadCleanup").start()
+    }
 
     private fun suggestedDownloadName(response: WebResponse): String {
         val disposition = response.headers.entries.firstOrNull {
@@ -1308,83 +1319,52 @@ class MainActivity : Activity() {
         return safe.ifBlank { "download-${System.currentTimeMillis()}" }
     }
 
-    private fun handleExternalResponse(response: WebResponse) {
+    private fun handleExternalResponse(response: WebResponse, privateMode: Boolean) {
         val body = response.body
         if (body == null) {
             Toast.makeText(this, "This download has no response body", Toast.LENGTH_LONG).show()
             return
         }
-
         val fileName = suggestedDownloadName(response)
         val sourceHost = Uri.parse(response.uri).host ?: "web content"
-        AlertDialog.Builder(this)
-            .setTitle("Download file?")
-            .setMessage("$fileName\n\nFrom: $sourceHost\n\nOnly save files you trust.")
-            .setNegativeButton("Cancel") { _, _ ->
-                try { body.close() } catch (_: Exception) { }
-            }
-            .setPositiveButton("Download") { _, _ ->
-                startDownload(response, fileName)
-            }
-            .setOnCancelListener {
-                try { body.close() } catch (_: Exception) { }
-            }
-            .show()
+        val title = if (privateMode) "Temporary private download?" else "Download file?"
+        val message = if (privateMode) fileName + "\n\nFrom: " + sourceHost + "\n\nThis file is temporary and will be deleted when the last private tab closes or Astra restarts. It will not appear in regular download history." else fileName + "\n\nFrom: " + sourceHost + "\n\nOnly save files you trust."
+        AlertDialog.Builder(this).setTitle(title).setMessage(message)
+            .setNegativeButton("Cancel") { _, _ -> try { body.close() } catch (_: Exception) { } }
+            .setPositiveButton("Download") { _, _ -> startDownload(response, fileName, privateMode) }
+            .setOnCancelListener { try { body.close() } catch (_: Exception) { } }.show()
     }
 
-    private fun startDownload(response: WebResponse, suggestedName: String) {
+    private fun startDownload(response: WebResponse, suggestedName: String, privateMode: Boolean) {
         val body = response.body
-        if (body == null) {
-            Toast.makeText(this, "Download failed: response body unavailable", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        val directory = downloadDirectory()
+        if (body == null) { Toast.makeText(this, "Download failed: response body unavailable", Toast.LENGTH_LONG).show(); return }
+        val directory = downloadDirectory(privateMode)
         val base = safeDownloadFileName(suggestedName)
         val dot = base.lastIndexOf('.')
         val stem = if (dot > 0) base.substring(0, dot) else base
         val extension = if (dot > 0) base.substring(dot) else ""
         var target = File(directory, base)
         var suffix = 1
-        while (target.exists()) {
-            target = File(directory, "$stem ($suffix)$extension")
-            suffix++
-        }
+        while (target.exists()) { target = File(directory, stem + " (" + suffix + ")" + extension); suffix++ }
         val finalFile = target
-        val temporaryFile = File(directory, ".${finalFile.name}.part")
-
-        Toast.makeText(this, "Downloading ${finalFile.name}…", Toast.LENGTH_SHORT).show()
+        val temporaryFile = File(directory, "." + finalFile.name + ".part")
         Thread({
             try {
-                temporaryFile.outputStream().buffered().use { output ->
-                    body.use { input -> input.copyTo(output) }
-                }
-                if (!temporaryFile.renameTo(finalFile)) {
-                    temporaryFile.copyTo(finalFile, overwrite = false)
-                    temporaryFile.delete()
-                }
-                val item = DownloadItem(
-                    name = finalFile.name,
-                    bytes = finalFile.length(),
-                    completedAt = System.currentTimeMillis()
-                )
+                temporaryFile.outputStream().buffered().use { output -> body.use { input -> input.copyTo(output) } }
+                if (!temporaryFile.renameTo(finalFile)) { temporaryFile.copyTo(finalFile, overwrite = false); temporaryFile.delete() }
+                val item = DownloadItem(finalFile.name, finalFile.length(), System.currentTimeMillis(), privateMode)
                 runOnUiThread {
-                    downloads.removeAll { it.name == item.name }
+                    if (privateMode && (isFinishing || isDestroyed || tabs.none { it.isPrivateMode })) { temporaryFile.delete(); finalFile.delete(); clearPrivateDownloads(); return@runOnUiThread }
+                    downloads.removeAll { it.name == item.name && it.isPrivateMode == item.isPrivateMode }
                     downloads.add(0, item)
-                    while (downloads.size > 100) {
-                        val removed = downloads.removeAt(downloads.lastIndex)
-                        File(directory, removed.name).delete()
-                    }
+                    while (downloads.size > 100) { val removed = downloads.removeAt(downloads.lastIndex); File(downloadDirectory(removed.isPrivateMode), removed.name).delete() }
                     persistDownloads()
-                    Toast.makeText(this, "Saved ${item.name}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, if (privateMode) "Saved temporarily: " + item.name else "Saved " + item.name, Toast.LENGTH_LONG).show()
                 }
             } catch (error: Exception) {
                 try { body.close() } catch (_: Exception) { }
                 temporaryFile.delete()
-                runOnUiThread {
-                    Toast.makeText(this, "Download failed: ${error.localizedMessage ?: "I/O error"}",
-                        Toast.LENGTH_LONG).show()
-                }
+                runOnUiThread { Toast.makeText(this, "Download failed: " + (error.localizedMessage ?: "I/O error"), Toast.LENGTH_LONG).show() }
             }
         }, "AstraDownload").start()
     }
@@ -2905,7 +2885,8 @@ class MainActivity : Activity() {
 
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
-                handleExternalResponse(response)
+                val privateMode = tabs.firstOrNull { it.session === session }?.isPrivateMode ?: true
+                handleExternalResponse(response, privateMode)
             }
 
             override fun onTitleChange(session: GeckoSession, title: String?) {
@@ -3049,6 +3030,7 @@ class MainActivity : Activity() {
         val closing = tabs.removeAt(index)
         if (!closing.isPrivateMode) rememberClosedTab(closing)
         closing.session.close()
+        if (PrivateBrowsingPolicy.shouldClearPrivateDownloads(closing.isPrivateMode, tabs.count { it.isPrivateMode })) clearPrivateDownloads()
 
         if (tabs.isEmpty()) {
             currentTabIndex = 0
@@ -3417,6 +3399,7 @@ class MainActivity : Activity() {
         pendingAndroidPermissionCallback = null
         pendingAndroidPermissions = emptyArray()
         persistOpenTabsIfReady()
+        clearPrivateDownloads()
         tabs.forEach { tab -> tab.session.close() }
         tabs.clear()
         super.onDestroy()
