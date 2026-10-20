@@ -32,6 +32,7 @@ import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.content.pm.ActivityInfo
 import android.view.WindowManager
+import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
@@ -50,6 +51,7 @@ import org.mozilla.geckoview.PageExtractionController
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.StorageController
+import org.mozilla.geckoview.WebExtension
 
 /**
  * First native Astra shell. GeckoView owns webpage rendering; the start page,
@@ -62,6 +64,8 @@ class MainActivity : Activity() {
     private lateinit var reloadButton: TextView
     private lateinit var browserTopBar: View
     private var videoFullScreen = false
+    private var videoSettingsExtension: WebExtension? = null
+    private val videoNativeApp = "org.aaaasta03.astrabrowser.video"
 
     private data class BrowserTab(
         val session: GeckoSession,
@@ -233,7 +237,24 @@ class MainActivity : Activity() {
                 .globalPrivacyControlEnabled(isGlobalPrivacyControlEnabled())
                 .build()
         )
-        restoreOpenTabs()
+        runtime.webExtensionController.ensureBuiltIn(
+            "resource://android/assets/astra-video/",
+            "astra-video@aaaasta03"
+        ).accept(
+            { extension ->
+                runOnUiThread {
+                    videoSettingsExtension = extension
+                    restoreOpenTabs()
+                }
+            },
+            { error ->
+                Log.e("AstraVideo", "Could not install video settings extension", error)
+                runOnUiThread {
+                    Toast.makeText(this, "Video speed helper could not start", Toast.LENGTH_LONG).show()
+                    restoreOpenTabs()
+                }
+            }
+        )
     }
 
     private fun buildTopBar(): View {
@@ -2866,6 +2887,25 @@ class MainActivity : Activity() {
 
     private fun configureSession(newSession: GeckoSession) {
         newSession.settings.setUseTrackingProtection(isTrackingProtectionEnabled())
+        videoSettingsExtension?.let { extension ->
+            newSession.webExtensionController.setMessageDelegate(
+                extension,
+                object : WebExtension.MessageDelegate {
+                    override fun onMessage(
+                        nativeApp: String,
+                        message: Any,
+                        sender: WebExtension.MessageSender
+                    ): GeckoResult<Any>? {
+                        val response = JSONObject()
+                            .put("playbackSpeed", browserPrefs.getFloat("video_playback_speed", 1f))
+                            .put("autoLandscape", browserPrefs.getBoolean("video_auto_landscape", true))
+                            .put("immersiveFullscreen", browserPrefs.getBoolean("video_immersive_fullscreen", true))
+                        return GeckoResult.fromValue(response as Any)
+                    }
+                },
+                videoNativeApp
+            )
+        }
         newSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
             override fun onAndroidPermissionsRequest(
                 session: GeckoSession,
@@ -2941,7 +2981,6 @@ class MainActivity : Activity() {
                 }
 
                 if (tabs.getOrNull(currentTabIndex) === tab) {
-                    applyVideoPlaybackSpeed()
                 }
             }
 
@@ -3466,12 +3505,6 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Close", null)
             .show()
-    }
-
-    private fun applyVideoPlaybackSpeed(speed: Float = browserPrefs.getFloat("video_playback_speed", 1f)) {
-        if (!::geckoView.isInitialized || currentTab.isHome) return
-        val script = "(function(){document.querySelectorAll('video').forEach(function(v){v.playbackRate=$speed;});return true;})()"
-        currentTab.session.evaluateJS(script)
     }
 
     override fun onBackPressed() {
