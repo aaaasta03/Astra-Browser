@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -212,6 +213,6 @@ class SettingsActivity : Activity() {
             .show()
     }
 
-    private fun roundedBackground(): View = View(this).apply { setBackgroundColor(surface) }
+    private fun roundedBackground(): GradientDrawable = GradientDrawable().apply { setColor(surface); cornerRadius = dp(16).toFloat() }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
