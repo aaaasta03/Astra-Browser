@@ -49,11 +49,15 @@ class VideoPlayerActivity : Activity() {
     private lateinit var seekBar: SeekBar
     private lateinit var titleLabel: TextView
     private lateinit var muteButton: TextView
+    private lateinit var speedButton: TextView
     private lateinit var lockButton: TextView
     private var userSeeking = false
     private var pendingSeekPosition = 0L
     private var controlsLocked = false
     private var controlsShownInPip = false
+    private var enteringPictureInPicture = false
+    private var lifecyclePausedPlayback = false
+    private var lifecyclePauseWasPlaying = false
     private val handler = Handler(Looper.getMainLooper())
     private val preferences by lazy {
         getSharedPreferences("astra_browser_library", MODE_PRIVATE)
@@ -155,6 +159,7 @@ class VideoPlayerActivity : Activity() {
                         preferences.edit()
                             .putFloat("video_playback_speed", playbackParameters.speed.coerceIn(0.5f, 2f))
                             .apply()
+                        updatePlaybackSpeedButton()
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
@@ -172,6 +177,7 @@ class VideoPlayerActivity : Activity() {
             }
 
         updateMuteButton()
+        updatePlaybackSpeedButton()
         updateLockButton()
         handler.post(refreshProgress)
         scheduleHideControls()
@@ -192,12 +198,17 @@ class VideoPlayerActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
             }
             top.addView(controlButton("‹", "Back", 30f) { finish() },
-                LinearLayout.LayoutParams(dp(44), dp(44)))
+                LinearLayout.LayoutParams(dp(48), dp(48)))
             titleLabel = TextView(this@VideoPlayerActivity).apply {
                 text = "Now playing"
                 textSize = 14f
                 maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+                marqueeRepeatLimit = -1
+                isFocusable = true
+                isFocusableInTouchMode = true
+                isSelected = true
                 typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 setTextColor(Color.WHITE)
                 setPadding(dp(8), 0, dp(10), 0)
@@ -205,15 +216,15 @@ class VideoPlayerActivity : Activity() {
             top.addView(titleLabel, LinearLayout.LayoutParams(0, -2, 1f))
             top.addView(controlButton("↻", "Rotate orientation", 21f) {
                 toggleOrientation()
-            }, LinearLayout.LayoutParams(dp(42), dp(44)))
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
             muteButton = controlButton("🔊", "Mute audio", 19f) {
                 player?.let { it.volume = if (it.volume > 0f) 0f else 1f }
                 updateMuteButton()
             }
-            top.addView(muteButton, LinearLayout.LayoutParams(dp(42), dp(44)))
+            top.addView(muteButton, LinearLayout.LayoutParams(dp(48), dp(48)))
             top.addView(controlButton("▣", "Picture in Picture", 20f) {
                 enterPlayerPictureInPicture()
-            }, LinearLayout.LayoutParams(dp(42), dp(44)))
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
             addView(top)
 
             addView(LinearLayout(this@VideoPlayerActivity).apply {
@@ -281,7 +292,7 @@ class VideoPlayerActivity : Activity() {
                     }
                 })
             }
-            timeline.addView(seekBar, LinearLayout.LayoutParams(0, dp(30), 1f))
+            timeline.addView(seekBar, LinearLayout.LayoutParams(0, dp(42), 1f))
             totalLabel = TextView(this@VideoPlayerActivity).apply {
                 text = "00:00"
                 textSize = 12f
@@ -304,22 +315,23 @@ class VideoPlayerActivity : Activity() {
                 setControlsVisible(false)
                 Toast.makeText(this@VideoPlayerActivity, "Controls locked · long-press the video to unlock", Toast.LENGTH_LONG).show()
             }
-            dock.addView(lockButton, LinearLayout.LayoutParams(dp(42), dp(44)))
+            dock.addView(lockButton, LinearLayout.LayoutParams(dp(48), dp(48)))
             dock.addView(controlButton("CC", "Subtitles and captions", 13f) {
                 showTrackSelection("Subtitles / captions", C.TRACK_TYPE_TEXT)
-            }, LinearLayout.LayoutParams(dp(42), dp(44)))
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
             dock.addView(controlButton("♫", "Audio tracks", 19f) {
                 showTrackSelection("Audio track", C.TRACK_TYPE_AUDIO)
-            }, LinearLayout.LayoutParams(dp(42), dp(44)))
-            dock.addView(controlButton("1×", "Playback speed", 14f) {
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            speedButton = controlButton("1×", "Playback speed", 14f) {
                 showPlaybackSpeed()
-            }, LinearLayout.LayoutParams(dp(42), dp(44)))
+            }
+            dock.addView(speedButton, LinearLayout.LayoutParams(dp(48), dp(48)))
             dock.addView(controlButton("▣", "Video fit", 18f) {
                 showVideoFit()
-            }, LinearLayout.LayoutParams(dp(42), dp(44)))
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
             dock.addView(controlButton("⚙", "Video settings", 20f) {
                 showVideoSettings()
-            }, LinearLayout.LayoutParams(dp(42), dp(44)))
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
             addView(dock, LinearLayout.LayoutParams(-2, -2).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 topMargin = dp(3)
@@ -383,6 +395,14 @@ class VideoPlayerActivity : Activity() {
         muteButton.contentDescription = if (muted) "Unmute audio" else "Mute audio"
     }
 
+    private fun updatePlaybackSpeedButton() {
+        if (!::speedButton.isInitialized) return
+        val speed = player?.playbackParameters?.speed ?: 1f
+        val label = if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()
+        speedButton.text = "${label}×"
+        speedButton.contentDescription = "Playback speed, ${label} times"
+    }
+
     private fun updateLockButton() {
         if (!::lockButton.isInitialized) return
         lockButton.text = if (controlsLocked) "🔒" else "🔓"
@@ -391,12 +411,14 @@ class VideoPlayerActivity : Activity() {
 
     private fun updateProgress() {
         val exo = player ?: return
-        val duration = exo.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+        val reportedDuration = exo.duration
+        val durationKnown = reportedDuration > 0 && reportedDuration != C.TIME_UNSET
+        val duration = if (durationKnown) reportedDuration else 0L
         val position = exo.currentPosition.coerceAtLeast(0L)
         if (!userSeeking) {
-            seekBar.progress = if (duration > 0) (position.toDouble() * seekBar.max / duration).toInt() else 0
+            seekBar.progress = if (durationKnown) (position.toDouble() * seekBar.max / duration).toInt() else 0
             elapsedLabel.text = formatTime(position)
-            totalLabel.text = formatTime(duration)
+            totalLabel.text = if (durationKnown) formatTime(duration) else "—"
         }
     }
 
@@ -440,13 +462,19 @@ class VideoPlayerActivity : Activity() {
 
     private fun enterPlayerPictureInPicture() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            enteringPictureInPicture = true
             runCatching {
-                enterPictureInPictureMode(
+                val entered = enterPictureInPictureMode(
                     PictureInPictureParams.Builder()
                         .setAspectRatio(Rational(16, 9))
                         .build()
                 )
+                if (!entered) {
+                    enteringPictureInPicture = false
+                    Toast.makeText(this, "Picture-in-Picture is unavailable on this device", Toast.LENGTH_SHORT).show()
+                }
             }.onFailure {
+                enteringPictureInPicture = false
                 Toast.makeText(this, "Picture-in-Picture is unavailable on this device", Toast.LENGTH_SHORT).show()
             }
         }
@@ -541,12 +569,20 @@ class VideoPlayerActivity : Activity() {
     override fun onResume() {
         super.onResume()
         enterImmersiveMode()
-        player?.playWhenReady = true
+        if (lifecyclePausedPlayback) {
+            player?.playWhenReady = lifecyclePauseWasPlaying
+            lifecyclePausedPlayback = false
+            lifecyclePauseWasPlaying = false
+        }
         scheduleHideControls()
     }
 
     override fun onPause() {
-        player?.playWhenReady = false
+        if (!isInPictureInPictureMode && !enteringPictureInPicture) {
+            lifecyclePauseWasPlaying = player?.playWhenReady == true
+            lifecyclePausedPlayback = true
+            player?.playWhenReady = false
+        }
         handler.removeCallbacks(hideControls)
         super.onPause()
     }
@@ -558,6 +594,7 @@ class VideoPlayerActivity : Activity() {
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        enteringPictureInPicture = false
         controlsShownInPip = controlsOverlay.visibility == View.VISIBLE
         if (isInPictureInPictureMode) {
             controlsOverlay.visibility = View.GONE
