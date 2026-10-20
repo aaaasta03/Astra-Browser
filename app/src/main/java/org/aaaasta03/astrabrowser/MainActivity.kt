@@ -1371,6 +1371,8 @@ class MainActivity : Activity() {
 
     private fun showDownloadsDialog() {
         lateinit var dialog: AlertDialog
+        val privateMode = currentTab.isPrivateMode
+        val visibleDownloads = downloads.filter { PrivateBrowsingPolicy.shouldShowDownload(it.isPrivateMode, privateMode) }
 
         val contentPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1405,15 +1407,14 @@ class MainActivity : Activity() {
         fun renderDownloads(query: String) {
             listPanel.removeAllViews()
             val trimmedQuery = query.trim()
-            val entries = downloads.toList().filter { item ->
+            val entries = visibleDownloads.filter { item ->
                 trimmedQuery.isEmpty() || item.name.contains(trimmedQuery, ignoreCase = true)
             }
 
             if (entries.isEmpty()) {
                 listPanel.addView(TextView(this).apply {
                     text = when {
-                        downloads.isEmpty() ->
-                            "No downloads yet. Files downloaded from pages will appear here."
+                        visibleDownloads.isEmpty() -> if (privateMode) "No temporary downloads in this private session." else "No downloads yet. Files downloaded from pages will appear here."
                         trimmedQuery.isNotEmpty() ->
                             "No downloads match \"$trimmedQuery\"."
                         else -> "No downloads yet."
@@ -1439,10 +1440,10 @@ class MainActivity : Activity() {
                             .setMessage(item.name)
                             .setNegativeButton("Cancel", null)
                             .setPositiveButton("Delete") { _, _ ->
-                                File(downloadDirectory(), item.name).delete()
-                                downloads.removeAll { it.name == item.name }
+                                File(downloadDirectory(item.isPrivateMode), item.name).delete()
+                                downloads.removeAll { it.name == item.name && it.isPrivateMode == item.isPrivateMode }
                                 persistDownloads()
-                                dialog.setTitle("Downloads · ${downloads.size}")
+                                dialog.setTitle(if (privateMode) "Private downloads · ${visibleDownloads.size}" else "Downloads · ${visibleDownloads.size}")
                                 renderDownloads(searchField.text?.toString().orEmpty())
                             }
                             .show()
@@ -1469,7 +1470,7 @@ class MainActivity : Activity() {
         }
 
         dialog = AlertDialog.Builder(this)
-            .setTitle("Downloads · ${downloads.size}")
+            .setTitle(if (privateMode) "Private downloads · ${visibleDownloads.size}" else "Downloads · ${visibleDownloads.size}")
             .setView(contentPanel)
             .setNegativeButton("Close", null)
             .setPositiveButton("Clear all", null)
@@ -1478,13 +1479,12 @@ class MainActivity : Activity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 AlertDialog.Builder(this)
                     .setTitle("Delete all downloaded files?")
-                    .setMessage("This deletes files saved by Astra in its private download storage.")
+                    .setMessage(if (privateMode) "This deletes temporary downloads from this private session." else "This deletes regular downloads saved by Astra.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Delete all") { _, _ ->
-                        downloads.toList().forEach { File(downloadDirectory(), it.name).delete() }
-                        downloads.clear()
+                        visibleDownloads.toList().forEach { item -> File(downloadDirectory(item.isPrivateMode), item.name).delete(); downloads.removeAll { it.name == item.name && it.isPrivateMode == item.isPrivateMode } }
                         persistDownloads()
-                        dialog.setTitle("Downloads · 0")
+                        dialog.setTitle(if (privateMode) "Private downloads · 0" else "Downloads · 0")
                         renderDownloads("")
                         searchField.setText("")
                     }
@@ -1504,9 +1504,9 @@ class MainActivity : Activity() {
     }
 
     private fun openDownloadedFile(item: DownloadItem) {
-        val file = File(downloadDirectory(), item.name)
+        val file = File(downloadDirectory(item.isPrivateMode), item.name)
         if (!file.isFile) {
-            downloads.removeAll { it.name == item.name }
+            downloads.removeAll { it.name == item.name && it.isPrivateMode == item.isPrivateMode }
             persistDownloads()
             Toast.makeText(this, "File no longer exists", Toast.LENGTH_SHORT).show()
             return
