@@ -534,8 +534,8 @@ class MainActivity : Activity() {
         menu.addView(menuItem("Site permissions", "Review and reset saved website permissions") {
             showSitePermissionsDialog()
         })
-        menu.addView(menuItem("Settings & privacy", "Privacy status and roadmap") {
-            showPrivacyInfo()
+        menu.addView(menuItem("Settings", "Search, homepage, privacy and security") {
+            startActivity(android.content.Intent(this, SettingsActivity::class.java))
         })
         menu.addView(menuItem("Clear browsing data", "Remove cookies, site data, cache and history") {
             showClearBrowsingDataDialog()
