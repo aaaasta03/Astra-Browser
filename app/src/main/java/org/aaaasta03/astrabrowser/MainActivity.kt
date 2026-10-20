@@ -128,7 +128,7 @@ class MainActivity : Activity() {
         var isFavorite: Boolean = false
     )
 
-    private data class DownloadItem(val name: String, val bytes: Long, val completedAt: Long, val isPrivateMode: Boolean = false)
+    private data class DownloadItem(val name: String, val bytes: Long, val completedAt: Long)
     private val downloads = mutableListOf<DownloadItem>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -219,7 +219,6 @@ class MainActivity : Activity() {
         setContentView(root)
 
         homeSearch.hint = "Search with ${selectedSearchEngine.label}"
-        clearStalePrivateDownloadFiles()
         loadBrowserLibrary()
 
         runtime = GeckoRuntime.create(
@@ -1082,7 +1081,6 @@ class MainActivity : Activity() {
         history.clear()
         persistHistory()
         clearSavedMediaPermissions()
-        clearPrivateDownloads()
         showingHome = true
         homeView.visibility = View.VISIBLE
         geckoView.visibility = View.GONE
@@ -1272,7 +1270,7 @@ class MainActivity : Activity() {
 
     private fun persistDownloads() {
         val data = JSONArray()
-        downloads.filter { PrivateBrowsingPolicy.shouldPersistDownload(it.isPrivateMode) }.forEach { item ->
+        downloads.forEach { item ->
             data.put(JSONObject()
                 .put("name", item.name)
                 .put("bytes", item.bytes)
@@ -1281,21 +1279,8 @@ class MainActivity : Activity() {
         browserPrefs.edit().putString("downloads", data.toString()).apply()
     }
 
-    private fun downloadDirectory(privateMode: Boolean = false): File =
-        File(filesDir, if (privateMode) "private_downloads" else "downloads")
-            .apply { if (!exists()) mkdirs() }
-
-    private fun clearStalePrivateDownloadFiles() {
-        File(filesDir, "private_downloads").deleteRecursively()
-    }
-
-    private fun clearPrivateDownloads() {
-        downloads.filter { it.isPrivateMode }.forEach { item ->
-            File(filesDir, "private_downloads/" + item.name).delete()
-        }
-        downloads.removeAll { it.isPrivateMode }
-        File(filesDir, "private_downloads").deleteRecursively()
-    }
+    private fun downloadDirectory(): File =
+        File(filesDir, "downloads").apply { if (!exists()) mkdirs() }
 
     private fun suggestedDownloadName(response: WebResponse): String {
         val disposition = response.headers.entries.firstOrNull {
@@ -2920,8 +2905,7 @@ class MainActivity : Activity() {
 
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
-                val privateMode = tabs.firstOrNull { it.session === session }?.isPrivateMode ?: true
-                handleExternalResponse(response, privateMode)
+                handleExternalResponse(response)
             }
 
             override fun onTitleChange(session: GeckoSession, title: String?) {
@@ -3065,12 +3049,6 @@ class MainActivity : Activity() {
         val closing = tabs.removeAt(index)
         if (!closing.isPrivateMode) rememberClosedTab(closing)
         closing.session.close()
-        if (PrivateBrowsingPolicy.shouldClearPrivateDownloads(
-                closing.isPrivateMode,
-                tabs.count { it.isPrivateMode }
-            )) {
-            clearPrivateDownloads()
-        }
 
         if (tabs.isEmpty()) {
             currentTabIndex = 0
@@ -3439,7 +3417,6 @@ class MainActivity : Activity() {
         pendingAndroidPermissionCallback = null
         pendingAndroidPermissions = emptyArray()
         persistOpenTabsIfReady()
-        clearPrivateDownloads()
         tabs.forEach { tab -> tab.session.close() }
         tabs.clear()
         super.onDestroy()
