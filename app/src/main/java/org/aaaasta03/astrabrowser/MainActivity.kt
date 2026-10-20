@@ -3394,6 +3394,21 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!::runtime.isInitialized || !::browserPrefs.isInitialized) return
+        selectedSearchEngine = UrlNormalizer.SearchEngine.fromId(browserPrefs.getString("search_engine", null))
+        val trackingEnabled = isTrackingProtectionEnabled()
+        tabs.forEach { tab -> tab.session.settings.setUseTrackingProtection(trackingEnabled) }
+        runtime.settings.setGlobalPrivacyControl(isGlobalPrivacyControlEnabled())
+        (trackingProtectionMenuItem as? LinearLayout)?.getChildAt(0)?.let { child ->
+            (child as? TextView)?.text = "Tracking protection: ${if (trackingEnabled) "On" else "Off"}"
+        }
+        (globalPrivacyControlMenuItem as? LinearLayout)?.getChildAt(0)?.let { child ->
+            (child as? TextView)?.text = "Global Privacy Control: ${if (isGlobalPrivacyControlEnabled()) "On" else "Off"}"
+        }
+    }
+
     override fun onDestroy() {
         pendingAndroidPermissionCallback?.reject()
         pendingAndroidPermissionCallback = null
