@@ -3485,8 +3485,7 @@ class MainActivity : Activity() {
                         .setTitle("Default playback speed")
                         .setSingleChoiceItems(speeds, selected) { dialog, index ->
                             browserPrefs.edit().putFloat("video_playback_speed", values[index]).apply()
-                            applyVideoPlaybackSpeed(values[index])
-                            Toast.makeText(this, "Default speed: ${speeds[index]}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, "Default speed saved: ${speeds[index]}. Reopen or replay the video to apply.", Toast.LENGTH_LONG).show()
                             dialog.dismiss()
                         }
                         .setNegativeButton("Cancel", null)
