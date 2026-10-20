@@ -14,8 +14,8 @@
       if (Number.isFinite(next) && next >= 0.25 && next <= 4) speed = next;
       scan(document);
     }).catch(() => {});
-  document.addEventListener("play", event => apply(event.target), true);
-  document.addEventListener("loadedmetadata", event => apply(event.target), true);
+  document.addEventListener("play", event => { requestSettings(); apply(event.target); }, true);
+  document.addEventListener("loadedmetadata", event => { requestSettings(); apply(event.target); }, true);
   new MutationObserver(records => records.forEach(record =>
     record.addedNodes.forEach(scan)
   )).observe(document, { childList: true, subtree: true });
