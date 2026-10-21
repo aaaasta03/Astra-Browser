@@ -139,10 +139,14 @@ class VideoPlayerActivity : Activity() {
         }
 
         controlsOverlay = buildControlsOverlay()
-        val root = FrameLayout(this).apply {
+        brightnessHud = buildLevelIndicator(LevelGesture.BRIGHTNESS)
+        volumeHud = buildLevelIndicator(LevelGesture.VOLUME)
+        val root = PlayerGestureRoot(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(playerView, FrameLayout.LayoutParams(-1, -1))
             addView(controlsOverlay, FrameLayout.LayoutParams(-1, -1))
+            addView(brightnessHud, FrameLayout.LayoutParams(dp(68), dp(178), Gravity.START or Gravity.CENTER_VERTICAL).apply { marginStart = dp(18) })
+            addView(volumeHud, FrameLayout.LayoutParams(dp(68), dp(178), Gravity.END or Gravity.CENTER_VERTICAL).apply { marginEnd = dp(18) })
         }
         setContentView(root)
 
@@ -218,6 +222,139 @@ class VideoPlayerActivity : Activity() {
         updateLockButton()
         handler.post(refreshProgress)
         scheduleHideControls()
+    }
+
+    private inner class PlayerGestureRoot(context: android.content.Context) : FrameLayout(context) {
+        private val slop = ViewConfiguration.get(context).scaledTouchSlop
+        private var downX = 0f
+        private var downY = 0f
+        private var candidate = false
+
+        override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    candidate = !controlsLocked && !isInPictureInPictureMode &&
+                        (controlsOverlay.visibility != View.VISIBLE ||
+                            (event.y >= height * 0.18f && event.y <= height * 0.86f))
+                    activeLevelGesture = null
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.x - downX
+                    val dy = event.y - downY
+                    if (candidate && activeLevelGesture == null && abs(dy) > slop && abs(dy) > abs(dx) * 1.15f) {
+                        beginLevelGesture(if (downX < width / 2f) LevelGesture.BRIGHTNESS else LevelGesture.VOLUME)
+                        return activeLevelGesture != null
+                    }
+                    if (activeLevelGesture != null) return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (activeLevelGesture == null) candidate = false
+            }
+            return false
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            val type = activeLevelGesture ?: return true
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    if (height <= 0) return true
+                    val delta = ((downY - event.y) * 100f / height).toInt()
+                    val level = (gestureStartLevel + delta).coerceIn(0, 100)
+                    if (type == LevelGesture.BRIGHTNESS) {
+                        playerBrightnessPercent = level
+                        applyPlayerBrightness(level, persist = false)
+                    } else {
+                        playerVolumePercent = level
+                        applyMediaVolumePercent(level, persist = false)
+                    }
+                    updateLevelIndicator(type, level)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (type == LevelGesture.BRIGHTNESS) applyPlayerBrightness(playerBrightnessPercent)
+                    else applyMediaVolumePercent(playerVolumePercent)
+                    activeLevelGesture = null
+                    candidate = false
+                    handler.removeCallbacks(hideLevelIndicators)
+                    handler.postDelayed(hideLevelIndicators, 950L)
+                }
+            }
+            return true
+        }
+    }
+
+    private inner class VerticalLevelBar(context: android.content.Context) : View(context) {
+        var levelPercent: Int = 50
+            set(value) { field = value.coerceIn(0, 100); invalidate() }
+        private val track = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x55FFFFFF }
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFB9A7FF.toInt() }
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = dp(5).toFloat()
+            val left = (width - w) / 2f
+            val top = dp(3).toFloat()
+            val bottom = height - dp(3).toFloat()
+            val radius = w / 2f
+            canvas.drawRoundRect(RectF(left, top, left + w, bottom), radius, radius, track)
+            val fillHeight = (bottom - top) * levelPercent / 100f
+            if (fillHeight > 0f) canvas.drawRoundRect(RectF(left, bottom - fillHeight, left + w, bottom), radius, radius, fill)
+        }
+    }
+
+    private fun beginLevelGesture(type: LevelGesture) {
+        if (controlsLocked || isInPictureInPictureMode) return
+        handler.removeCallbacks(hideLevelIndicators)
+        activeLevelGesture = type
+        gestureStartLevel = if (type == LevelGesture.BRIGHTNESS) playerBrightnessPercent else playerVolumePercent
+        updateLevelIndicator(type, gestureStartLevel)
+    }
+
+    private fun updateLevelIndicator(type: LevelGesture, percent: Int) {
+        val level = percent.coerceIn(0, 100)
+        if (type == LevelGesture.BRIGHTNESS) {
+            brightnessPercentLabel.text = "$level%"
+            brightnessLevelBar.levelPercent = level
+            brightnessHud.visibility = View.VISIBLE
+            volumeHud.visibility = View.GONE
+        } else {
+            volumePercentLabel.text = "$level%"
+            volumeLevelBar.levelPercent = level
+            volumeHud.visibility = View.VISIBLE
+            brightnessHud.visibility = View.GONE
+        }
+    }
+
+    private fun buildLevelIndicator(type: LevelGesture): LinearLayout {
+        val bright = type == LevelGesture.BRIGHTNESS
+        val bar = VerticalLevelBar(this).apply { levelPercent = if (bright) playerBrightnessPercent else playerVolumePercent }
+        val percent = TextView(this).apply {
+            text = if (bright) "$playerBrightnessPercent%" else "$playerVolumePercent%"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+        }
+        if (bright) { brightnessLevelBar = bar; brightnessPercentLabel = percent }
+        else { volumeLevelBar = bar; volumePercentLabel = percent }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(8), dp(10), dp(8), dp(10))
+            background = GradientDrawable().apply {
+                setColor(0xDD17171D.toInt())
+                cornerRadius = dp(28).toFloat()
+                setStroke(dp(1), 0x44FFFFFF)
+            }
+            visibility = View.GONE
+            isClickable = false
+            addView(TextView(this@VideoPlayerActivity).apply {
+                text = if (bright) "☼" else "♫"
+                textSize = 22f
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+            }, LinearLayout.LayoutParams(-1, dp(30)))
+            addView(bar, LinearLayout.LayoutParams(dp(28), dp(88)).apply { topMargin = dp(7); bottomMargin = dp(6) })
+            addView(percent, LinearLayout.LayoutParams(-1, dp(24)))
+        }
     }
 
     private fun buildControlsOverlay(): LinearLayout {
@@ -439,6 +576,7 @@ class VideoPlayerActivity : Activity() {
     /** Applies brightness to this Activity window only; system brightness is never written. */
     private fun applyPlayerBrightness(percent: Int, persist: Boolean = true) {
         val normalized = percent.coerceIn(0, 100)
+        playerBrightnessPercent = normalized
         val params = window.attributes
         params.screenBrightness = normalized / 100f
         window.attributes = params
@@ -449,6 +587,7 @@ class VideoPlayerActivity : Activity() {
 
     private fun applyMediaVolumePercent(percent: Int, persist: Boolean = true) {
         val normalized = percent.coerceIn(0, 100)
+        playerVolumePercent = normalized
         val volume = normalized / 100f
         player?.volume = volume
         if (volume > 0f) lastAudibleVolume = volume
@@ -692,101 +831,18 @@ class VideoPlayerActivity : Activity() {
             })
         }
 
-        fun addSliderControl(
-            icon: String,
-            title: String,
-            detail: String,
-            initialValue: Int,
-            onChanged: (Int) -> Unit
-        ) {
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(12), dp(10), dp(12), dp(7))
-                background = GradientDrawable().apply {
-                    setColor(0xFF292933.toInt())
-                    cornerRadius = dp(15).toFloat()
-                    setStroke(dp(1), 0x20FFFFFF)
-                }
+        addSection("On-screen controls")
+        rows.addView(TextView(this).apply {
+            text = "Swipe vertically on the left side of the video to adjust brightness, or on the right side to adjust media volume. A compact vertical indicator appears while you swipe."
+            textSize = 13f
+            setTextColor(0xFFD2D2DC.toInt())
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+            background = GradientDrawable().apply {
+                setColor(0xFF292933.toInt())
+                cornerRadius = dp(15).toFloat()
+                setStroke(dp(1), 0x20FFFFFF)
             }
-            val heading = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            heading.addView(TextView(this).apply {
-                text = icon
-                textSize = 21f
-                gravity = Gravity.CENTER
-                setTextColor(0xFFB9A7FF.toInt())
-            }, LinearLayout.LayoutParams(dp(38), dp(38)))
-            val labelColumn = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(6), 0, dp(4), 0)
-            }
-            labelColumn.addView(TextView(this).apply {
-                text = title
-                textSize = 14f
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                setTextColor(Color.WHITE)
-            })
-            labelColumn.addView(TextView(this).apply {
-                text = detail
-                textSize = 11f
-                maxLines = 2
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(0xFFB8B8C5.toInt())
-            })
-            heading.addView(labelColumn, LinearLayout.LayoutParams(0, -2, 1f))
-            val valueLabel = TextView(this).apply {
-                text = "$initialValue%"
-                textSize = 14f
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                gravity = Gravity.CENTER
-                setTextColor(Color.WHITE)
-            }
-            heading.addView(valueLabel, LinearLayout.LayoutParams(dp(48), dp(38)))
-            card.addView(heading, LinearLayout.LayoutParams(-1, -2))
-
-            val slider = SeekBar(this).apply {
-                max = 100
-                progress = initialValue.coerceIn(0, 100)
-                progressTintList = ColorStateList.valueOf(0xFFB9A7FF.toInt())
-                thumbTintList = ColorStateList.valueOf(Color.WHITE)
-                progressBackgroundTintList = ColorStateList.valueOf(0x66FFFFFF)
-                setPadding(dp(3), 0, dp(3), 0)
-                contentDescription = "$title percentage"
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
-                        valueLabel.text = "$progress%"
-                        if (fromUser) onChanged(progress)
-                    }
-                    override fun onStartTrackingTouch(bar: SeekBar?) = Unit
-                    override fun onStopTrackingTouch(bar: SeekBar?) = Unit
-                })
-            }
-            card.addView(slider, LinearLayout.LayoutParams(-1, dp(38)))
-            rows.addView(card, LinearLayout.LayoutParams(-1, -2).apply {
-                bottomMargin = dp(8)
-            })
-        }
-
-        addSection("Display & sound")
-        val initialBrightnessPercent = preferences.getInt(
-            "native_video_brightness_percent",
-            getSystemBrightnessPercent()
-        ).coerceIn(0, 100)
-        val initialVolumePercent = preferences.getInt("native_video_volume_percent", 100).coerceIn(0, 100)
-        addSliderControl(
-            "☼",
-            "Screen brightness",
-            "Only changes brightness in Astra's video player",
-            initialBrightnessPercent
-        ) { percent -> applyPlayerBrightness(percent) }
-        addSliderControl(
-            "♫",
-            "Media volume",
-            "Adjust this video's audio from 0% to 100%",
-            initialVolumePercent
-        ) { percent -> applyMediaVolumePercent(percent) }
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
         addSection("Playback")
         addRow(
@@ -947,6 +1003,7 @@ class VideoPlayerActivity : Activity() {
     override fun onDestroy() {
         handler.removeCallbacks(refreshProgress)
         handler.removeCallbacks(hideControls)
+        handler.removeCallbacks(hideLevelIndicators)
         playerView.player = null
         player?.release()
         player = null
