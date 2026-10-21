@@ -1,0 +1,31 @@
+{
+  "manifest_version": 2,
+  "name": "Astra Video Settings",
+  "version": "1.0",
+  "description": "Applies Astra's saved video playback preferences.",
+  "applications": {
+    "gecko": {
+      "id": "astra-video@aaaasta03"
+    }
+  },
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

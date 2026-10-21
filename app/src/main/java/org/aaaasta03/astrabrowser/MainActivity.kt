@@ -30,6 +30,9 @@ import android.widget.TextView
 import android.widget.Toast
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
+import android.content.pm.ActivityInfo
+import android.view.WindowManager
+import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
@@ -48,6 +51,7 @@ import org.mozilla.geckoview.PageExtractionController
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.StorageController
+import org.mozilla.geckoview.WebExtension
 
 /**
  * First native Astra shell. GeckoView owns webpage rendering; the start page,
@@ -58,6 +62,10 @@ class MainActivity : Activity() {
     private lateinit var addressBar: EditText
     private lateinit var tabCountButton: TextView
     private lateinit var reloadButton: TextView
+    private lateinit var browserTopBar: View
+    private var videoFullScreen = false
+    private var videoSettingsExtension: WebExtension? = null
+    private val videoNativeApp = "org.aaaasta03.astrabrowser.video"
 
     private data class BrowserTab(
         val session: GeckoSession,
@@ -151,7 +159,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(pageBackground)
         }
-        column.addView(buildTopBar(), LinearLayout.LayoutParams(
+        browserTopBar = buildTopBar()
+        column.addView(browserTopBar, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(64)
         ))
 
@@ -228,7 +237,24 @@ class MainActivity : Activity() {
                 .globalPrivacyControlEnabled(isGlobalPrivacyControlEnabled())
                 .build()
         )
-        restoreOpenTabs()
+        runtime.webExtensionController.ensureBuiltIn(
+            "resource://android/assets/astra-video/",
+            "astra-video@aaaasta03"
+        ).accept(
+            { extension ->
+                runOnUiThread {
+                    videoSettingsExtension = extension
+                    restoreOpenTabs()
+                }
+            },
+            { error ->
+                Log.e("AstraVideo", "Could not install video settings extension", error)
+                runOnUiThread {
+                    Toast.makeText(this, "Video speed helper could not start", Toast.LENGTH_LONG).show()
+                    restoreOpenTabs()
+                }
+            }
+        )
     }
 
     private fun buildTopBar(): View {
@@ -512,6 +538,9 @@ class MainActivity : Activity() {
         })
         menu.addView(menuItem("Homepage", "Choose the page opened in new tabs") {
             showHomepageDialog()
+        })
+        menu.addView(menuItem("Video settings", "Playback speed and full-screen behavior") {
+            showVideoSettingsDialog()
         })
 
         menu.addView(sectionLabel("PRIVACY & TOOLS"), menuLabelParams().apply {
@@ -2858,6 +2887,31 @@ class MainActivity : Activity() {
 
     private fun configureSession(newSession: GeckoSession) {
         newSession.settings.setUseTrackingProtection(isTrackingProtectionEnabled())
+        videoSettingsExtension?.let { extension ->
+            newSession.webExtensionController.setMessageDelegate(
+                extension,
+                object : WebExtension.MessageDelegate {
+                    override fun onMessage(
+                        nativeApp: String,
+                        message: Any,
+                        sender: WebExtension.MessageSender
+                    ): GeckoResult<Any>? {
+                        val request = message as? JSONObject
+                        if (request?.optString("type") == "request-native-video") {
+                            val response = handleNativeVideoHandoffMessage(newSession, request)
+                            return GeckoResult.fromValue(response as Any)
+                        }
+
+                        val response = JSONObject()
+                            .put("playbackSpeed", browserPrefs.getFloat("video_playback_speed", 1f))
+                            .put("autoLandscape", browserPrefs.getBoolean("video_auto_landscape", true))
+                            .put("immersiveFullscreen", browserPrefs.getBoolean("video_immersive_fullscreen", true))
+                        return GeckoResult.fromValue(response as Any)
+                    }
+                },
+                videoNativeApp
+            )
+        }
         newSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
             override fun onAndroidPermissionsRequest(
                 session: GeckoSession,
@@ -2884,6 +2938,15 @@ class MainActivity : Activity() {
         }
 
         newSession.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                if (session !== currentTab.session) return
+                if (fullScreen) {
+                    setVideoFullScreen(true)
+                } else {
+                    setVideoFullScreen(false)
+                }
+            }
+
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 val privateMode = tabs.firstOrNull { it.session === session }?.isPrivateMode ?: true
                 handleExternalResponse(response, privateMode)
@@ -2926,6 +2989,9 @@ class MainActivity : Activity() {
                 if (urlChanged) {
                     recordHistory(url, session)
                     persistOpenTabsIfReady()
+                }
+
+                if (tabs.getOrNull(currentTabIndex) === tab) {
                 }
             }
 
@@ -3386,8 +3452,119 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    /**
+     * Accept a handoff request from Astra's built-in WebExtension. GeckoView JavaScript
+     * data is passed through supported native messaging; no unsupported JS evaluation API.
+     * Only direct media URLs are eligible; blob/DRM/player-managed streams stay in GeckoView.
+     */
+    private fun handleNativeVideoHandoffMessage(
+        session: GeckoSession,
+        request: JSONObject
+    ): JSONObject {
+        val source = request.optString("src").trim()
+        if (session !== currentTab.session || !VideoSource.isDirectMediaUrl(source)) {
+            return JSONObject().put("accepted", false)
+        }
+
+        val title = request.optString("title").trim().take(160)
+        val positionMs = request.optLong("positionMs", 0L).coerceAtLeast(0L)
+        return runCatching {
+            startActivity(
+                Intent(this, VideoPlayerActivity::class.java)
+                    .putExtra(VideoPlayerActivity.EXTRA_SOURCE, source)
+                    .putExtra(VideoPlayerActivity.EXTRA_TITLE, title)
+                    .putExtra(VideoPlayerActivity.EXTRA_START_POSITION_MS, positionMs)
+            )
+            runCatching { session.exitFullScreen() }
+                .onFailure { Log.w("AstraVideo", "Could not exit web fullscreen after handoff", it) }
+            JSONObject().put("accepted", true)
+        }.getOrElse { error ->
+            Log.w("AstraVideo", "Native fullscreen handoff failed; keeping browser player", error)
+            JSONObject().put("accepted", false)
+        }
+    }
+
+    private fun setVideoFullScreen(enabled: Boolean) {
+        videoFullScreen = enabled
+
+        // Keep Astra's bottom navigation visible to match the in-browser video layout.
+        // Only the address/top bar is hidden; site-owned controls (for example YouTube's
+        // playback, captions, and settings buttons) remain part of the webpage player.
+        browserTopBar.visibility = if (enabled) View.GONE else View.VISIBLE
+        menuScrim.visibility = View.GONE
+        menuPanel.visibility = View.GONE
+        menuOpen = false
+
+        if (enabled) {
+            val immersive = browserPrefs.getBoolean("video_immersive_fullscreen", true)
+            if (immersive) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                window.decorView.systemUiVisibility =
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                window.decorView.systemUiVisibility = 0
+            }
+
+            requestedOrientation = if (browserPrefs.getBoolean("video_auto_landscape", true)) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            window.decorView.systemUiVisibility = 0
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    private fun showVideoSettingsDialog() {
+        val speeds = arrayOf("0.5×", "0.75×", "Normal (1×)", "1.25×", "1.5×", "1.75×", "2×")
+        val values = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+        val currentSpeed = browserPrefs.getFloat("video_playback_speed", 1f)
+        val selected = values.indices.minByOrNull { kotlin.math.abs(values[it] - currentSpeed) } ?: 2
+        val items = arrayOf(
+            "Playback speed",
+            "Auto-rotate video to landscape",
+            "Use immersive full-screen"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Video settings")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> AlertDialog.Builder(this)
+                        .setTitle("Default playback speed")
+                        .setSingleChoiceItems(speeds, selected) { dialog, index ->
+                            browserPrefs.edit().putFloat("video_playback_speed", values[index]).apply()
+                            Toast.makeText(this, "Default speed saved: ${speeds[index]}. Reopen or replay the video to apply.", Toast.LENGTH_LONG).show()
+                            dialog.dismiss()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                    1 -> {
+                        val enabled = !browserPrefs.getBoolean("video_auto_landscape", true)
+                        browserPrefs.edit().putBoolean("video_auto_landscape", enabled).apply()
+                        Toast.makeText(this, "Auto landscape ${if (enabled) "enabled" else "disabled"}", Toast.LENGTH_SHORT).show()
+                    }
+                    2 -> {
+                        val enabled = !browserPrefs.getBoolean("video_immersive_fullscreen", true)
+                        browserPrefs.edit().putBoolean("video_immersive_fullscreen", enabled).apply()
+                        Toast.makeText(this, "Immersive full-screen ${if (enabled) "enabled" else "disabled"}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
     override fun onBackPressed() {
         when {
+            videoFullScreen -> currentTab.session.exitFullScreen()
             menuOpen -> closeMenu()
             !currentTab.isHome -> currentTab.session.goBack()
             else -> super.onBackPressed()
@@ -3398,6 +3575,7 @@ class MainActivity : Activity() {
         pendingAndroidPermissionCallback?.reject()
         pendingAndroidPermissionCallback = null
         pendingAndroidPermissions = emptyArray()
+        if (videoFullScreen) setVideoFullScreen(false)
         persistOpenTabsIfReady()
         clearPrivateDownloads()
         tabs.forEach { tab -> tab.session.close() }
