@@ -115,9 +115,8 @@ class VideoPlayerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (preferences.contains("native_video_brightness_percent")) {
-            applyPlayerBrightness(preferences.getInt("native_video_brightness_percent", 70), persist = false)
-        }
+        playerBrightnessPercent = preferences.getInt("native_video_brightness_percent", getSystemBrightnessPercent()).coerceIn(0, 100)
+        applyPlayerBrightness(playerBrightnessPercent, persist = false)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         enterImmersiveMode()
 
@@ -175,6 +174,7 @@ class VideoPlayerActivity : Activity() {
             )
             .build()
         val initialVolumePercent = preferences.getInt("native_video_volume_percent", 100).coerceIn(0, 100)
+        playerVolumePercent = initialVolumePercent
         lastAudibleVolume = preferences.getFloat(
             "native_video_last_audible_volume",
             if (initialVolumePercent > 0) initialVolumePercent / 100f else 1f
