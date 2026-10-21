@@ -2896,6 +2896,12 @@ class MainActivity : Activity() {
                         message: Any,
                         sender: WebExtension.MessageSender
                     ): GeckoResult<Any>? {
+                        val request = message as? JSONObject
+                        if (request?.optString("type") == "request-native-video") {
+                            val response = handleNativeVideoHandoffMessage(newSession, request)
+                            return GeckoResult.fromValue(response as Any)
+                        }
+
                         val response = JSONObject()
                             .put("playbackSpeed", browserPrefs.getFloat("video_playback_speed", 1f))
                             .put("autoLandscape", browserPrefs.getBoolean("video_auto_landscape", true))
@@ -2935,7 +2941,7 @@ class MainActivity : Activity() {
             override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
                 if (session !== currentTab.session) return
                 if (fullScreen) {
-                    attemptNativeVideoFullscreenHandoff(session)
+                    setVideoFullScreen(true)
                 } else {
                     setVideoFullScreen(false)
                 }
@@ -3447,56 +3453,35 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Prefer Astra's native player when the fullscreen HTML video exposes a
-     * directly playable media URL. Complex site players remain in GeckoView.
+     * Accept a handoff request from Astra's built-in WebExtension. GeckoView JavaScript
+     * data is passed through supported native messaging; no unsupported JS evaluation API.
+     * Only direct media URLs are eligible; blob/DRM/player-managed streams stay in GeckoView.
      */
-    private fun attemptNativeVideoFullscreenHandoff(session: GeckoSession) {
-        val script = """
-            (() => {
-              const v = document.querySelector('video');
-              if (!v) return JSON.stringify({ok:false});
-              const src = v.currentSrc || v.src || '';
-              const payload = {
-                ok: !!src,
-                src: src,
-                title: document.title || '',
-                positionMs: Math.max(0, Math.floor((v.currentTime || 0) * 1000))
-              };
-              if (payload.ok) v.pause();
-              return JSON.stringify(payload);
-            })()
-        """.trimIndent()
-        session.evaluateJS(script).accept(
-            { result ->
-                runOnUiThread {
-                    val payload = runCatching {
-                        JSONObject(result as? String ?: return@runOnUiThread)
-                    }.getOrNull()
-                    val source = payload?.optString("src").orEmpty()
-                    if (payload?.optBoolean("ok", false) == true &&
-                        VideoSource.isDirectMediaUrl(source)
-                    ) {
-                        val title = payload.optString("title").take(160)
-                        val positionMs = payload.optLong("positionMs", 0L).coerceAtLeast(0L)
-                        runCatching {
-                            startActivity(Intent(this, VideoPlayerActivity::class.java)
-                                .putExtra(VideoPlayerActivity.EXTRA_SOURCE, source)
-                                .putExtra(VideoPlayerActivity.EXTRA_TITLE, title)
-                                .putExtra(VideoPlayerActivity.EXTRA_START_POSITION_MS, positionMs))
-                            session.exitFullScreen()
-                        }.onFailure {
-                            Log.w("AstraVideo", "Native fullscreen handoff failed; keeping browser fullscreen", it)
-                            setVideoFullScreen(true)
-                        }
-                    } else {
-                        setVideoFullScreen(true)
-                    }
-                }
-            },
-            {
-                runOnUiThread { setVideoFullScreen(true) }
-            }
-        )
+    private fun handleNativeVideoHandoffMessage(
+        session: GeckoSession,
+        request: JSONObject
+    ): JSONObject {
+        val source = request.optString("src").trim()
+        if (session !== currentTab.session || !VideoSource.isDirectMediaUrl(source)) {
+            return JSONObject().put("accepted", false)
+        }
+
+        val title = request.optString("title").trim().take(160)
+        val positionMs = request.optLong("positionMs", 0L).coerceAtLeast(0L)
+        return runCatching {
+            startActivity(
+                Intent(this, VideoPlayerActivity::class.java)
+                    .putExtra(VideoPlayerActivity.EXTRA_SOURCE, source)
+                    .putExtra(VideoPlayerActivity.EXTRA_TITLE, title)
+                    .putExtra(VideoPlayerActivity.EXTRA_START_POSITION_MS, positionMs)
+            )
+            runCatching { session.exitFullScreen() }
+                .onFailure { Log.w("AstraVideo", "Could not exit web fullscreen after handoff", it) }
+            JSONObject().put("accepted", true)
+        }.getOrElse { error ->
+            Log.w("AstraVideo", "Native fullscreen handoff failed; keeping browser player", error)
+            JSONObject().put("accepted", false)
+        }
     }
 
     private fun setVideoFullScreen(enabled: Boolean) {
