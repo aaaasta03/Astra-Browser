@@ -693,6 +693,10 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Enter a web address or search term", Toast.LENGTH_SHORT).show()
             return
         }
+        if (VideoSource.isDirectMediaUrl(destination)) {
+            launchNativeVideoPlayer(destination)
+            return
+        }
         addressBar.setText(destination)
         currentTab.url = destination
         currentTab.isHome = false
@@ -1503,12 +1507,23 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    private fun launchNativeVideoPlayer(source: String) {
+        startActivity(Intent(this, VideoPlayerActivity::class.java).putExtra(
+            VideoPlayerActivity.EXTRA_SOURCE,
+            source
+        ))
+    }
+
     private fun openDownloadedFile(item: DownloadItem) {
         val file = File(downloadDirectory(item.isPrivateMode), item.name)
         if (!file.isFile) {
             downloads.removeAll { it.name == item.name && it.isPrivateMode == item.isPrivateMode }
             persistDownloads()
             Toast.makeText(this, "File no longer exists", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (VideoSource.isLocalMediaFile(file)) {
+            launchNativeVideoPlayer(Uri.fromFile(file).toString())
             return
         }
         try {
